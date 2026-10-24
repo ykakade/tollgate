@@ -31,3 +31,10 @@ tenants:
     # Run "tollgate keys create -id laptop" and paste its lines here.
     keys: []
     models: [claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5]
+    # Tollgate refuses requests when the spend of the month or of one
+    # session gets to the limit. Change the limits to your needs.
+    budgets:
+      - window: month
+        limit_usd: 50
+      - window: session
+        limit_usd: 5

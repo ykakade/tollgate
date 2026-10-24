@@ -51,6 +51,12 @@ func TestBodyMeter(t *testing.T) {
 		t.Errorf("Usage() = %+v, %v, want %+v", got, ok, want)
 	}
 	m = NewBodyMeter()
+	_, _ = m.Write([]byte(`{"usage":{"input_tokens":1,"cache_creation_input_tokens":9,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":6},"output_tokens":2}}`))
+	got, ok = m.Usage()
+	if want := (provider.Usage{InputTokens: 1, CacheWriteTokens: 9, CacheWrite1hTokens: 6, OutputTokens: 2}); !ok || got != want {
+		t.Errorf("Usage() with 1-hour cache writes = %+v, %v, want %+v", got, ok, want)
+	}
+	m = NewBodyMeter()
 	_, _ = m.Write([]byte(`{"input_tokens":3}`))
 	if _, ok := m.Usage(); ok {
 		t.Error("Usage() of a body without usage: ok = true")

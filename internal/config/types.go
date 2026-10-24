@@ -114,3 +114,59 @@ const redacted = "<redacted>"
 func typeError(n *yaml.Node, format string, args ...any) error {
 	return &yaml.TypeError{Errors: []string{fmt.Sprintf("line %d: %s", n.Line, fmt.Sprintf(format, args...))}}
 }
+
+// USD is an amount of money in micro-USD (ADR 0011). YAML reads it as a
+// decimal number of US dollars with at most 6 decimal places, such as "50"
+// or "0.25". The amount is exact: Tollgate does not use a float.
+type USD int64
+
+// maxUSD is the largest amount of a USD field: 1,000,000,000 USD.
+const maxUSD = 1_000_000_000
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (u *USD) UnmarshalYAML(n *yaml.Node) error {
+	v, ok := parseUSD(n.Value)
+	if !ok || n.Kind != yaml.ScalarNode {
+		return typeError(n, "The value %q is not an amount in USD. Use a number with at most 6 decimal places, for example 50 or 0.25.", n.Value)
+	}
+	*u = USD(v)
+	return nil
+}
+
+func parseUSD(text string) (int64, bool) {
+	whole, frac, dot := strings.Cut(strings.TrimSpace(text), ".")
+	if whole == "" || (dot && frac == "") || len(frac) > 6 || len(whole) > 10 || !allDigits(whole) || !allDigits(frac) {
+		return 0, false
+	}
+	w, err := strconv.ParseInt(whole, 10, 64)
+	if err != nil || w > maxUSD {
+		return 0, false
+	}
+	f := int64(0)
+	if frac != "" {
+		f, err = strconv.ParseInt(frac+strings.Repeat("0", 6-len(frac)), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+	}
+	return w*1_000_000 + f, true
+}
+
+func allDigits(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// String returns the amount in USD with 2 or more decimal places.
+func (u USD) String() string {
+	whole, frac := int64(u)/1_000_000, int64(u)%1_000_000
+	s := fmt.Sprintf("%d.%06d", whole, frac)
+	for strings.HasSuffix(s, "0") && len(s) > len(strconv.FormatInt(whole, 10))+3 {
+		s = s[:len(s)-1]
+	}
+	return s
+}

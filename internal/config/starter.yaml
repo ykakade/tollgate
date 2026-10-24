@@ -10,6 +10,24 @@ server:
   # After SIGTERM, the longest time that open requests can continue.
   drain_timeout: 10m
 
+# The store of the rate limit and budget counters. Use memory for one
+# Tollgate copy. To share the limits between copies, use redis:
+#   kind: redis
+#   redis_url: env:REDIS_URL
+store:
+  kind: memory
+
+# Tollgate writes one usage event for each request to this file. With the
+# memory store, Tollgate reads the file at start to keep the month spend.
+usage:
+  sink: jsonl
+  path: ./data/usage.jsonl
+
+# Tollgate has a price table for the Anthropic models below. To use other
+# prices, copy pricing.yaml from the repository and set its path here.
+# pricing:
+#   file: ./pricing.yaml
+
 providers:
   anthropic:
     kind: anthropic
@@ -50,3 +68,16 @@ tenants:
     # Run "tollgate keys create -id laptop" and paste its lines here.
     keys: []
     models: [claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5]
+    # The rate limits of the tenant. 0 means no limit.
+    limits:
+      requests_per_minute: 0
+      tokens_per_minute: 0
+    # The budgets of the tenant, in USD. A hard budget refuses requests
+    # with status 402. A soft budget only writes a warning to the log.
+    # budgets:
+    #   - window: month
+    #     limit_usd: 50
+    #     mode: hard
+    #   - window: session
+    #     limit_usd: 5
+    #     mode: hard

@@ -15,10 +15,13 @@ import (
 
 	"github.com/ykakade/tollgate/internal/auth"
 	"github.com/ykakade/tollgate/internal/config"
+	"github.com/ykakade/tollgate/internal/limiter"
+	"github.com/ykakade/tollgate/internal/pricing"
 	"github.com/ykakade/tollgate/internal/provider"
 	"github.com/ykakade/tollgate/internal/provider/anthropic"
 	"github.com/ykakade/tollgate/internal/provider/openai"
 	"github.com/ykakade/tollgate/internal/relay"
+	"github.com/ykakade/tollgate/internal/usage"
 )
 
 // Server settings that the configuration does not set.
@@ -44,17 +47,36 @@ type Options struct {
 	Adapters map[string]provider.Adapter
 	// Logger receives the access log. If nil, the server logs nothing.
 	Logger *slog.Logger
+	// Store holds the rate limit and budget state. If nil, the server
+	// uses a new memory store.
+	Store limiter.Store
+	// Usage receives one usage event for each request. If nil, the server
+	// records no events.
+	Usage Emitter
+	// Now returns the current time. If nil, the server uses time.Now.
+	Now func() time.Time
+}
+
+// Emitter receives usage events. It must not block. A *usage.Queue is an
+// Emitter.
+type Emitter interface {
+	Emit(e usage.Event) bool
 }
 
 // Server is the data plane. Use New to make one.
 type Server struct {
-	keys         *auth.Keyring
-	routes       map[routeKey]*route
-	tenants      map[string]map[string]bool
-	maxBody      int64
-	drainTimeout time.Duration
-	logger       *slog.Logger
-	tracker      tracker
+	keys          *auth.Keyring
+	routes        map[routeKey]*route
+	tenants       map[string]*tenantPolicy
+	maxBody       int64
+	drainTimeout  time.Duration
+	logger        *slog.Logger
+	tracker       tracker
+	store         limiter.Store
+	usage         Emitter
+	now           func() time.Time
+	prices        *pricing.Table
+	reserveOutput int64
 }
 
 type routeKey struct {
@@ -63,7 +85,9 @@ type routeKey struct {
 }
 
 type route struct {
-	target   config.Target
+	target config.Target
+	// kind is the kind of the target provider, for the price table.
+	kind     string
 	adapter  provider.Adapter
 	timeouts relay.Timeouts
 }
@@ -76,15 +100,26 @@ func New(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("load keys: %w", err)
 	}
 	s := &Server{
-		keys:         keys,
-		routes:       make(map[routeKey]*route),
-		tenants:      make(map[string]map[string]bool),
-		maxBody:      int64(cfg.Server.MaxBodyBytes),
-		drainTimeout: cfg.Server.DrainTimeout.Std(),
-		logger:       opts.Logger,
+		keys:          keys,
+		routes:        make(map[routeKey]*route),
+		tenants:       make(map[string]*tenantPolicy),
+		maxBody:       int64(cfg.Server.MaxBodyBytes),
+		drainTimeout:  cfg.Server.DrainTimeout.Std(),
+		logger:        opts.Logger,
+		store:         opts.Store,
+		usage:         opts.Usage,
+		now:           opts.Now,
+		prices:        cfg.Prices,
+		reserveOutput: cfg.Reservation.OutputTokens,
 	}
 	if s.logger == nil {
 		s.logger = slog.New(slog.DiscardHandler)
+	}
+	if s.store == nil {
+		s.store = limiter.NewMemory()
+	}
+	if s.now == nil {
+		s.now = time.Now
 	}
 	for _, r := range cfg.Routes {
 		if len(r.Targets) == 0 {
@@ -97,6 +132,7 @@ func New(opts Options) (*Server, error) {
 		}
 		s.routes[routeKey{r.API, r.Model}] = &route{
 			target:  target,
+			kind:    cfg.Providers[target.Provider].Kind,
 			adapter: adapter,
 			timeouts: relay.Timeouts{
 				Connect:    r.Timeouts.Connect.Std(),
@@ -111,7 +147,7 @@ func New(opts Options) (*Server, error) {
 		for _, m := range t.Models {
 			models[m] = true
 		}
-		s.tenants[t.ID] = models
+		s.tenants[t.ID] = &tenantPolicy{models: models, limits: t.Limits, budgets: t.Budgets}
 	}
 	return s, nil
 }
@@ -157,18 +193,27 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	writeStatus(w, http.StatusOK, "ok")
 }
 
-func (s *Server) readyz(w http.ResponseWriter, _ *http.Request) {
+// readyz reports whether the server accepts requests. A limit store that
+// does not answer does not make the server not ready (ADR 0020): rate
+// limits then fail open, and only tenants with a hard budget get errors.
+// The body shows the state of the store.
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	store := s.storeState(r.Context())
 	if s.tracker.isDraining() {
-		writeStatus(w, http.StatusServiceUnavailable, "draining")
+		writeStatus(w, http.StatusServiceUnavailable, "draining", store)
 		return
 	}
-	writeStatus(w, http.StatusOK, "ready")
+	writeStatus(w, http.StatusOK, "ready", store)
 }
 
-func writeStatus(w http.ResponseWriter, code int, status string) {
+func writeStatus(w http.ResponseWriter, code int, status string, store ...string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
+	if len(store) > 0 {
+		_, _ = fmt.Fprintf(w, "{\"status\":%q,\"store\":%q}\n", status, store[0])
+		return
+	}
 	_, _ = fmt.Fprintf(w, "{\"status\":%q}\n", status)
 }
 

@@ -8,6 +8,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Rate limits for requests and tokens per minute for each tenant, with a sliding-window counter and the `ratelimit-*` and `retry-after` headers.
+- Month and session budgets for each tenant, with hard and soft modes. A hard budget refuses requests with status 402 and the error type `budget_exceeded`.
+- The `limiter.Store` interface with a memory store and a Redis store. One Lua script checks and reserves all limits of a request in one Redis round trip.
+- Rate limits fail open to local limits when Redis is not available. Requests of tenants with a hard budget fail closed with status 503.
+- The price table `pricing.yaml`, with the Anthropic models of `tollgate init`, and the cost of each request in micro-USD. The binary has a copy of the table.
+- The JSONL usage file with one usage event for each request, and the rebuild of the month and session spend from the file at start.
+- The `x-tollgate-session` request header for session budgets.
+- The configuration fields `store`, `usage`, `pricing`, `reservation`, `tenants[].limits` and `tenants[].budgets`.
+- The rate limits and budgets guide, with the tolerance of the rate limits and the worst-case overspend of a budget, and decision records ADR 0018, ADR 0019 and ADR 0020.
+- Tests with three Tollgate copies that share one limit and one budget, a restart test with the real binary, and SDK tests for the 429 and 402 errors.
+- The state of the limit store in the body of `/readyz`. `/readyz` does not fail when Redis does not answer (ADR 0020).
+- The tokens that Anthropic wrote to its 1-hour prompt cache, in the usage of each response.
 - The passthrough proxy for Anthropic `/v1/messages` and OpenAI `/v1/chat/completions`, with streaming and without streaming.
 - Provider keys from environment variables or files, virtual keys from YAML, and model permissions for each tenant.
 - The SSE parser and tee relay, with byte-exact golden tests and usage extraction for both API formats.

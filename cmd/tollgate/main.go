@@ -12,14 +12,22 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ykakade/tollgate/internal/auth"
+	"github.com/ykakade/tollgate/internal/budget"
 	"github.com/ykakade/tollgate/internal/buildinfo"
 	"github.com/ykakade/tollgate/internal/config"
+	"github.com/ykakade/tollgate/internal/limiter"
 	"github.com/ykakade/tollgate/internal/server"
+	"github.com/ykakade/tollgate/internal/usage"
 )
 
-const usage = `Tollgate is a lightweight AI gateway for coding agents.
+// usageCloseTimeout is the longest time to write the queued usage events
+// at shutdown.
+const usageCloseTimeout = 10 * time.Second
+
+const helpText = `Tollgate is a lightweight AI gateway for coding agents.
 
 Usage:
   tollgate <command> [flags]
@@ -52,7 +60,7 @@ func main() {
 // run executes the command in args and returns the process exit code.
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
+		fmt.Fprint(stderr, helpText)
 		return exitUsage
 	}
 	cmd, rest := args[0], args[1:]
@@ -81,7 +89,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "tollgate %s\n", buildinfo.Read())
 		return exitOK
 	case "help", "-h", "-help", "--help":
-		fmt.Fprint(stdout, usage)
+		fmt.Fprint(stdout, helpText)
 		return exitOK
 	default:
 		fmt.Fprintf(stderr, "The command %q is not known. Run \"tollgate help\" to see the commands.\n", cmd)
@@ -150,10 +158,32 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Tollgate cannot start the providers: %v\n", err)
 		return exitError
 	}
-	srv, err := server.New(server.Options{Config: cfg, Adapters: adapters, Logger: logger})
+	store, closeStore, err := newStore(ctx, cfg.Store, logger)
+	if err != nil {
+		fmt.Fprintf(stderr, "Tollgate cannot start the limit store: %v\n", err)
+		return exitError
+	}
+	defer closeStore()
+	queue, err := newUsageQueue(ctx, cfg.Usage, logger)
+	if err != nil {
+		fmt.Fprintf(stderr, "Tollgate cannot open the usage file %s: %v. Make sure that Tollgate can write to the directory.\n", cfg.Usage.Path, err)
+		return exitError
+	}
+	opts := server.Options{Config: cfg, Adapters: adapters, Logger: logger, Store: store}
+	if queue != nil {
+		opts.Usage = queue
+		defer closeUsage(ctx, queue, logger)
+	}
+	srv, err := server.New(opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "Tollgate cannot start: %v\n", err)
 		return exitError
+	}
+	if cfg.Store.Kind == config.StoreMemory && cfg.Usage.Sink == config.SinkJSONL {
+		if err := restoreSpend(ctx, srv, cfg.Usage.Path, logger); err != nil {
+			fmt.Fprintf(stderr, "Tollgate cannot read the spend from the usage file %s: %v\n", cfg.Usage.Path, err)
+			return exitError
+		}
 	}
 	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.Server.Listen)
 	if err != nil {
@@ -192,6 +222,80 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitError
 	}
 	return exitOK
+}
+
+// newStore makes the limit store of the configuration. A Redis store is
+// behind a Failover store, so that rate limits fail open (ADR 0006).
+func newStore(ctx context.Context, cfg config.Store, logger *slog.Logger) (limiter.Store, func(), error) {
+	if cfg.Kind != config.StoreRedis {
+		return limiter.NewMemory(), func() {}, nil
+	}
+	r, err := limiter.NewRedis(cfg.RedisURL.Value())
+	if err != nil {
+		return nil, nil, err
+	}
+	f := &limiter.Failover{
+		Main:  r,
+		Local: limiter.NewMemory(),
+		OnError: func(op string, err error) {
+			logger.WarnContext(ctx, "limit store failed", "op", op, "error", err.Error())
+		},
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := r.Ping(pingCtx); err != nil {
+		logger.WarnContext(ctx, "Redis is not available at start. Rate limits use local limits, and requests with a hard budget fail until Redis is available.", "error", err.Error())
+	}
+	return f, func() { _ = r.Close() }, nil
+}
+
+// newUsageQueue opens the usage sink of the configuration. It returns nil
+// if the sink is "none".
+func newUsageQueue(ctx context.Context, cfg config.Usage, logger *slog.Logger) (*usage.Queue, error) {
+	if cfg.Sink != config.SinkJSONL {
+		return nil, nil
+	}
+	sink, err := usage.OpenJSONL(cfg.Path)
+	if err != nil {
+		return nil, err
+	}
+	return usage.NewQueue(ctx, sink, cfg.QueueSize, logger), nil
+}
+
+// closeUsage writes the queued usage events and closes the usage file.
+func closeUsage(ctx context.Context, q *usage.Queue, logger *slog.Logger) {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), usageCloseTimeout)
+	defer cancel()
+	if err := q.Close(cctx); err != nil {
+		logger.ErrorContext(ctx, "usage events not written at shutdown", "error", err.Error())
+	}
+	if n := q.Dropped(); n > 0 {
+		logger.WarnContext(ctx, "usage events dropped", "events", n)
+	}
+}
+
+// restoreSpend rebuilds the month and session spend of the memory store
+// from the usage file (ADR 0019).
+func restoreSpend(ctx context.Context, srv *server.Server, path string, logger *slog.Logger) error {
+	sp, err := usage.ReadSpend(path, time.Now(), budget.SessionTTL)
+	if err != nil {
+		return err
+	}
+	if err := srv.RestoreSpend(ctx, sp); err != nil {
+		return err
+	}
+	var month int64
+	for _, c := range sp.Month {
+		month += c
+	}
+	logger.InfoContext(ctx, "spend restored from the usage file",
+		"events", sp.Events,
+		"bad_lines", sp.Bad,
+		"tenants", len(sp.Month),
+		"sessions", len(sp.Sessions),
+		"month_spend_micro_usd", month,
+	)
+	return nil
 }
 
 func runInit(args []string, stdout, stderr io.Writer) int {

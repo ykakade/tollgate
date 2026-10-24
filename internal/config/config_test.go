@@ -18,7 +18,27 @@ const testHash = "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e8
 
 func testEnv() Env {
 	vars := map[string]string{"ANTHROPIC_API_KEY": "sk-ant-test", "OPENAI_API_KEY": "sk-openai-test", "EMPTY": ""}
-	files := map[string]string{"/keys/openai": "sk-from-file\n", "/etc/tollgate/rel-key": "sk-relative"}
+	files := map[string]string{
+		"/keys/openai":          "sk-from-file\n",
+		"/etc/tollgate/rel-key": "sk-relative",
+		"/etc/tollgate/prices.yaml": `- provider: anthropic
+  model: claude-sonnet-5-5-20260101
+  effective_from: 2026-01-01
+  micro_usd_per_mtok: {input: 2000000, output: 10000000}
+- provider: openai
+  model: gpt-test
+  effective_from: 2026-01-01
+  micro_usd_per_mtok: {input: 1000000, output: 2000000}
+- provider: local
+  model: qwen
+  effective_from: 2026-01-01
+  micro_usd_per_mtok: {input: 0, output: 0}
+`,
+		"/etc/tollgate/bad-prices.yaml": "- provider: a\n  model: m\n  effective_from: never\n",
+		"redis-url":                     "redis://cache:6379/0",
+	}
+	vars["REDIS_URL"] = "redis://localhost:6379/0"
+	vars["BAD_REDIS_URL"] = "http://user:pw@localhost"
 	return Env{
 		LookupEnv: func(k string) (string, bool) { v, ok := vars[k]; return v, ok },
 		ReadFile: func(p string) ([]byte, error) {
@@ -166,7 +186,7 @@ func TestParseErrors(t *testing.T) {
 		{"no version", "server: {}\n", []string{"1: The version field is missing."}},
 		{"wrong version", "version: 2\n", []string{"1: The version 2 is not supported."}},
 		{"unknown field", replace(t, "  drain_timeout: 30s\n", "  drain_timeout: 30s\n  drain_timout: 1s\n"), []string{`6: The field "drain_timout" is not known.`}},
-		{"unknown top-level field", validConfig + "store:\n  kind: memory\n", []string{`40: The field "store" is not known.`}},
+		{"unknown top-level field", validConfig + "stores:\n  kind: memory\n", []string{`40: The field "stores" is not known.`}},
 		{"bad duration", replace(t, "drain_timeout: 30s", "drain_timeout: soon"), []string{`5: The value "soon" is not a duration.`}},
 		{"negative duration", replace(t, "drain_timeout: 30s", "drain_timeout: -1s"), []string{`5: The value "-1s" is not a duration.`}},
 		{"bad size", replace(t, "max_body_bytes: 4MiB", "max_body_bytes: 4MB"), []string{`4: The value "4MB" is not a size.`}},
@@ -176,7 +196,7 @@ func TestParseErrors(t *testing.T) {
 		{"plain-text key", replace(t, "api_key: env:ANTHROPIC_API_KEY", "api_key: sk-ant-secret"), []string{`9: The api_key of the provider "anthropic" is not a reference.`}},
 		{"missing variable", replace(t, "env:ANTHROPIC_API_KEY", "env:NOT_SET"), []string{`9: The environment variable NOT_SET is not set.`}},
 		{"empty variable", replace(t, "env:ANTHROPIC_API_KEY", "env:EMPTY"), []string{`9: The environment variable EMPTY is not set.`}},
-		{"missing file", replace(t, "file:/keys/openai", "file:/keys/none"), []string{`13: Tollgate cannot read the key file /keys/none`}},
+		{"missing file", replace(t, "file:/keys/openai", "file:/keys/none"), []string{`13: Tollgate cannot read the file /keys/none that has the API key of the provider "openai".`}},
 		{"unknown kind", replace(t, "kind: openai\n    base_url: https://api.openai.com", "kind: gemini\n    base_url: https://api.openai.com"), []string{`11: The provider kind "gemini" is not known.`}},
 		{"later kind", replace(t, "kind: openai\n    base_url: https://api.openai.com", "kind: vertex\n    base_url: https://api.openai.com"), []string{`11: The provider kind "vertex" is not available in this version.`}},
 		{"base url with v1", replace(t, "base_url: https://api.openai.com", "base_url: https://api.openai.com/v1"), []string{"12: The base_url of the provider \"openai\" ends with /v1."}},
@@ -325,6 +345,161 @@ func TestExamples(t *testing.T) {
 	for _, f := range files {
 		if _, err := Load(f, testEnv()); err != nil {
 			t.Errorf("%s: %v", f, err)
+		}
+	}
+}
+
+// limitsConfig is validConfig with the M2 fields. It reads its prices from
+// /etc/tollgate/prices.yaml.
+const limitsConfig = validConfig + `    limits:
+      requests_per_minute: 120
+      tokens_per_minute: 2000000
+    budgets:
+      - window: month
+        limit_usd: 50
+      - window: session
+        limit_usd: 0.25
+        mode: soft
+store:
+  kind: redis
+  redis_url: env:REDIS_URL
+usage:
+  path: data/usage.jsonl
+  queue_size: 100
+pricing:
+  file: prices.yaml
+reservation:
+  output_tokens: 1000
+`
+
+func TestParseLimitsAndBudgets(t *testing.T) {
+	cfg, err := Parse("/etc/tollgate/tollgate.yaml", []byte(limitsConfig), testEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tn := cfg.Tenants[0]
+	if tn.Limits != (Limits{RequestsPerMinute: 120, TokensPerMinute: 2000000}) {
+		t.Errorf("limits = %+v", tn.Limits)
+	}
+	want := []Budget{
+		{Window: WindowMonth, LimitUSD: 50_000_000, Mode: ModeHard},
+		{Window: WindowSession, LimitUSD: 250_000, Mode: ModeSoft},
+	}
+	if diff := cmp.Diff(want, tn.Budgets); diff != "" {
+		t.Errorf("budgets differ (-want +got):\n%s", diff)
+	}
+	if !tn.HasHardBudget() {
+		t.Error("HasHardBudget() = false, want true")
+	}
+	if cfg.Store.Kind != StoreRedis || cfg.Store.RedisURL.Value() != "redis://localhost:6379/0" {
+		t.Errorf("store = %+v", cfg.Store)
+	}
+	if cfg.Usage != (Usage{Sink: SinkJSONL, Path: "/etc/tollgate/data/usage.jsonl", QueueSize: 100}) {
+		t.Errorf("usage = %+v", cfg.Usage)
+	}
+	if cfg.Pricing.File != "/etc/tollgate/prices.yaml" || !cfg.Prices.Has("local", "openai", "qwen") {
+		t.Errorf("pricing = %+v, prices for local/qwen = %v", cfg.Pricing, cfg.Prices.Has("local", "openai", "qwen"))
+	}
+	if cfg.Reservation.OutputTokens != 1000 {
+		t.Errorf("reservation = %+v", cfg.Reservation)
+	}
+}
+
+func TestParseM2Defaults(t *testing.T) {
+	cfg, err := Parse("/srv/t.yaml", []byte("version: 1\n"), testEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Store.Kind != StoreMemory || cfg.Usage != (Usage{Sink: SinkJSONL, Path: "/srv/data/usage.jsonl", QueueSize: DefaultUsageQueueSize}) || cfg.Reservation.OutputTokens != DefaultReserveOutputTokens {
+		t.Errorf("defaults: store %+v, usage %+v, reservation %+v", cfg.Store, cfg.Usage, cfg.Reservation)
+	}
+	if !cfg.Prices.Has("anthropic", "anthropic", "claude-sonnet-5-5") {
+		t.Error("the default price table has no claude-sonnet-5-5")
+	}
+}
+
+func TestParseM2Errors(t *testing.T) {
+	for _, tt := range []struct {
+		name, old, repl string
+		want            []string
+	}{
+		{"store kind", "kind: redis", "kind: etcd", []string{`The store kind "etcd" is not known.`}},
+		{"redis without url", "  redis_url: env:REDIS_URL\n", "", []string{"The store kind is redis, but the store has no redis_url."}},
+		{"memory with url", "kind: redis", "kind: memory", []string{"The store kind is memory, but the store has a redis_url."}},
+		{"redis url plain text", "redis_url: env:REDIS_URL", "redis_url: redis://x", []string{"The redis_url of the store is not a reference."}},
+		{"redis url not set", "redis_url: env:REDIS_URL", "redis_url: env:NO_REDIS", []string{"The environment variable NO_REDIS is not set. Set it to the URL of the Redis server."}},
+		{"redis url not redis", "redis_url: env:REDIS_URL", "redis_url: env:BAD_REDIS_URL", []string{"The redis_url of the store is not a Redis URL."}},
+		{"sink postgres", "  path: data/usage.jsonl\n", "  sink: postgres\n", []string{"The usage sink postgres is not available in this version."}},
+		{"sink unknown", "  path: data/usage.jsonl\n", "  sink: kafka\n", []string{`The usage sink "kafka" is not known.`}},
+		{"queue size", "queue_size: 100", "queue_size: -1", []string{"The value of usage.queue_size is not valid."}},
+		{"reservation", "output_tokens: 1000", "output_tokens: 99999999", []string{"The value of reservation.output_tokens is not valid."}},
+		{"rpm", "requests_per_minute: 120", "requests_per_minute: -1", []string{`The requests_per_minute of the tenant "personal" is not valid.`}},
+		{"tpm", "tokens_per_minute: 2000000", "tokens_per_minute: 20000000000", []string{`The tokens_per_minute of the tenant "personal" is not valid.`}},
+		{"window", "window: month", "window: year", []string{`The budget window "year" of the tenant "personal" is not known.`}},
+		{"no window", "      - window: month\n        limit_usd: 50\n", "      - limit_usd: 50\n", []string{`A budget of the tenant "personal" has no window.`}},
+		{"two windows", "window: session", "window: month", []string{`The tenant "personal" has two month budgets.`}},
+		{"no limit", "limit_usd: 50", "limit_usd: 0", []string{`The month budget of the tenant "personal" has no limit_usd.`}},
+		{"bad amount", "limit_usd: 50", "limit_usd: 1.0000001", []string{`The value "1.0000001" is not an amount in USD.`}},
+		{"negative amount", "limit_usd: 50", "limit_usd: -5", []string{`The value "-5" is not an amount in USD.`}},
+		{"mode", "mode: soft", "mode: warn", []string{`The budget mode "warn" of the tenant "personal" is not known.`}},
+		{"no price file", "file: prices.yaml", "file: none.yaml", []string{"Tollgate cannot read the price table /etc/tollgate/none.yaml."}},
+		{"bad price file", "file: prices.yaml", "file: bad-prices.yaml", []string{"The effective_from date of a/m is not valid."}},
+		{"model without price", "file: prices.yaml", "file: ''", []string{
+			`The tenant "personal" has a budget, but the price table has no price for the model "claude-sonnet-5-5-20260101" of the provider "anthropic".`,
+			`The tenant "personal" has a budget, but the price table has no price for the model "gpt-test" of the provider "openai".`,
+			`The tenant "personal" has a budget, but the price table has no price for the model "qwen" of the provider "local".`,
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(limitsConfig, tt.old) {
+				t.Fatalf("limitsConfig does not contain %q", tt.old)
+			}
+			y := strings.Replace(limitsConfig, tt.old, tt.repl, 1)
+			_, err := Parse("/etc/tollgate/tollgate.yaml", []byte(y), testEnv())
+			ve, ok := errors.AsType[*ValidationError](err)
+			if !ok {
+				t.Fatalf("err = %v, want a *ValidationError", err)
+			}
+			if len(ve.Errors) != len(tt.want) {
+				t.Fatalf("got %d errors, want %d:\n%s", len(ve.Errors), len(tt.want), ve.Error())
+			}
+			for i, e := range ve.Errors {
+				if !strings.HasPrefix(e.Message, tt.want[i]) {
+					t.Errorf("error %d = %q, want prefix %q", i, e.Message, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestPriceFileErrorNamesTheFile(t *testing.T) {
+	y := strings.Replace(limitsConfig, "file: prices.yaml", "file: bad-prices.yaml", 1)
+	_, err := Parse("/etc/tollgate/tollgate.yaml", []byte(y), testEnv())
+	if err == nil || !strings.HasPrefix(err.Error(), "/etc/tollgate/bad-prices.yaml:1: ") {
+		t.Errorf("Error() = %v, want the form price-file:line: message", err)
+	}
+}
+
+func TestUSD(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		want int64
+		str  string
+	}{
+		{"50", 50_000_000, "50.00"},
+		{"0.25", 250_000, "0.25"},
+		{"1.000001", 1_000_001, "1.000001"},
+		{"1000000000", 1_000_000_000_000_000, "1000000000.00"},
+		{"0.1", 100_000, "0.10"},
+	} {
+		v, ok := parseUSD(tt.in)
+		if !ok || v != tt.want || USD(v).String() != tt.str {
+			t.Errorf("parseUSD(%q) = %d, %v, String() %q; want %d, %q", tt.in, v, ok, USD(v).String(), tt.want, tt.str)
+		}
+	}
+	for _, in := range []string{"", ".5", "1.", "-1", "1e3", "1000000001", "0.0000001", "1,5", "12345678901"} {
+		if _, ok := parseUSD(in); ok {
+			t.Errorf("parseUSD(%q) ok = true, want false", in)
 		}
 	}
 }

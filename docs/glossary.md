@@ -21,6 +21,8 @@ All Tollgate documents use these words with these meanings only. If a document n
 | drain | The shutdown steps: Tollgate refuses new requests and lets open streams finish. |
 | error event | An event that Tollgate adds to a stream when the provider fails after the first byte. Then Tollgate closes the stream. |
 | exact cache | A cache that returns a stored response only for a request with the same bytes and the same tenant. |
+| fail closed | To refuse a request when Tollgate cannot check a limit. Hard budgets fail closed. |
+| fail open | To send a request when Tollgate cannot check a limit. Rate limits fail open. |
 | fake provider | The test server in `cmd/fakeprovider`. It speaks the Anthropic and OpenAI wire formats. |
 | fallback | To send a request to the next target after a failure. |
 | first byte | The first byte of the response that Tollgate sends to the client. After the first byte, Tollgate does not fall back. |
@@ -28,8 +30,12 @@ All Tollgate documents use these words with these meanings only. If a document n
 | golden file | A file in `testdata/` that holds the expected bytes of a response. Tests compare the output of Tollgate with it. |
 | hard budget | A budget that stops requests when the spend reaches the limit. |
 | idle timeout | The longest time between two parts of a response body. It is also the longest time to write one part to the client. |
+| limit store | The store of the rate limit and budget counters: memory for one copy, Redis for two or more copies. |
+| local limit | The rate limit that each copy keeps in memory and uses when Redis is not available. |
 | micro-USD | One millionth of a US dollar. Tollgate stores all amounts in micro-USD. |
+| overspend | The spend over the limit of a hard budget. Its largest value is in `docs/limits.md`. |
 | preflight | The step that reads the model and the stream setting of a request and estimates its tokens and cost. |
+| price table | The list of prices for each provider and model, by date. The default is `pricing.yaml`. |
 | provider | A service that runs LLMs, for example Anthropic, OpenAI, Vertex AI, or Ollama. |
 | rate limit | The maximum number of requests or tokens for a tenant in one minute. |
 | relay | The step that sends the provider response to the client and reads a copy of it. |
@@ -39,6 +45,7 @@ All Tollgate documents use these words with these meanings only. If a document n
 | route | The configuration for one model name that clients send. It gives the API format and the list of targets. |
 | session | A group of requests from one agent task. |
 | settle | To replace a reservation with the real cost after the response. |
+| sliding-window counter | The method that Tollgate uses to count requests and tokens for the last 60 seconds from two one-minute counters. |
 | soft budget | A budget that only gives a warning when the spend reaches the limit. |
 | SSE | Server-sent events. The stream format that Anthropic and OpenAI use. |
 | STE | ASD-STE100 Simplified Technical English. The writing rules for Tollgate documents. |
@@ -47,6 +54,7 @@ All Tollgate documents use these words with these meanings only. If a document n
 | tenant | A user or a team that has its own keys, limits, and budgets. |
 | total timeout | The longest time for one full upstream request. |
 | usage event | The record of one request: tokens, cost, timing, and status. |
+| usage file | The JSONL file with one usage event for each request. |
 | virtual key | A key that Tollgate gives to a client. It starts with `tg_`. It is not a provider key. |
 | window | The period of a budget, for example a month or a session. |
 

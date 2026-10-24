@@ -18,6 +18,7 @@ import (
 
 	"github.com/ykakade/tollgate/internal/auth"
 	"github.com/ykakade/tollgate/internal/config"
+	"github.com/ykakade/tollgate/internal/limiter"
 )
 
 const (
@@ -52,6 +53,48 @@ type env struct {
 	key      string
 	logs     *syncBuffer
 	upstream *httptest.Server
+	done     *handlerDone
+}
+
+// handlerDone records the requests whose handler returned. The server
+// settles a request after the client has the response, so a test must wait
+// for the handler before it reads the limit store.
+type handlerDone struct {
+	mu   sync.Mutex
+	done map[string]chan struct{}
+}
+
+func (h *handlerDone) ch(id string) chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.done == nil {
+		h.done = make(map[string]chan struct{})
+	}
+	c, ok := h.done[id]
+	if !ok {
+		c = make(chan struct{})
+		h.done[id] = c
+	}
+	return c
+}
+
+func (h *handlerDone) wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		if id := w.Header().Get("X-Request-Id"); id != "" {
+			close(h.ch(id))
+		}
+	})
+}
+
+// wait waits until the handler of the request id returned.
+func (h *handlerDone) wait(t *testing.T, id string) {
+	t.Helper()
+	select {
+	case <-h.ch(id):
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the handler of request %s did not return", id)
+	}
 }
 
 type setup struct {
@@ -60,6 +103,17 @@ type setup struct {
 	timeouts    string
 	drain       string
 	maxBody     string
+	// tenant is added to the tenant "personal", with an indent of 4.
+	tenant string
+	// top is added to the top level of the configuration.
+	top string
+	// prices, if not empty, is the price table file of the configuration.
+	prices string
+	store  limiter.Store
+	now    func() time.Time
+	usage  Emitter
+	// upstreamURL, if not empty, replaces the URL of the upstream server.
+	upstreamURL string
 }
 
 // newEnv starts a Tollgate server in front of upstream. Both providers point
@@ -80,6 +134,13 @@ func newEnv(t *testing.T, upstream http.Handler, s setup) *env {
 	}
 	if s.maxBody == "" {
 		s.maxBody = "1MiB"
+	}
+	upURL := up.URL
+	if s.upstreamURL != "" {
+		upURL = s.upstreamURL
+	}
+	if s.prices != "" {
+		s.top += "\npricing:\n  file: prices.yaml\n"
 	}
 	yaml := fmt.Sprintf(`version: 1
 server:
@@ -111,10 +172,15 @@ tenants:
   - id: personal
     keys: [{id: laptop, hash: %s}]
     models: [claude-test, gpt-test]
-`, s.maxBody, s.drain, up.URL, up.URL, s.timeouts, s.timeouts, s.extraRoutes, auth.Hash(key))
+%s
+%s
+`, s.maxBody, s.drain, upURL, upURL, s.timeouts, s.timeouts, s.extraRoutes, auth.Hash(key), s.tenant, s.top)
 	vars := map[string]string{"A_KEY": anthropicProviderKey, "O_KEY": openaiProviderKey}
 	cfg, err := config.Parse("test.yaml", []byte(yaml), config.Env{
 		LookupEnv: func(k string) (string, bool) { v, ok := vars[k]; return v, ok },
+		ReadFile: func(string) ([]byte, error) {
+			return []byte(s.prices), nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -124,13 +190,21 @@ tenants:
 		t.Fatal(err)
 	}
 	logs := &syncBuffer{}
-	srv, err := New(Options{Config: cfg, Adapters: adapters, Logger: slog.New(slog.NewJSONHandler(logs, nil))})
+	srv, err := New(Options{
+		Config:   cfg,
+		Adapters: adapters,
+		Logger:   slog.New(slog.NewJSONHandler(logs, nil)),
+		Store:    s.store,
+		Now:      s.now,
+		Usage:    s.usage,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(srv.Handler())
+	done := &handlerDone{}
+	ts := httptest.NewServer(done.wrap(srv.Handler()))
 	t.Cleanup(ts.Close)
-	e := &env{t: t, srv: srv, url: ts.URL, key: key, logs: logs, upstream: up}
+	e := &env{t: t, srv: srv, url: ts.URL, key: key, logs: logs, upstream: up, done: done}
 	t.Cleanup(func() {
 		out := logs.String()
 		if strings.Contains(out, key) || strings.Contains(out, anthropicProviderKey) || strings.Contains(out, openaiProviderKey) {
@@ -163,7 +237,8 @@ type response struct {
 	Header     http.Header
 }
 
-// do sends a request and returns the response with its body.
+// do sends a request and returns the response with its body. It returns
+// after the handler of the request returned.
 func (e *env) do(req *http.Request) (response, string) {
 	e.t.Helper()
 	resp, err := http.DefaultClient.Do(req)
@@ -174,6 +249,9 @@ func (e *env) do(req *http.Request) (response, string) {
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		e.t.Fatal(err)
+	}
+	if id := resp.Header.Get("X-Request-Id"); id != "" {
+		e.done.wait(e.t, id)
 	}
 	return response{resp.StatusCode, resp.Header}, string(b)
 }
@@ -437,7 +515,7 @@ func TestNotFoundAndHealth(t *testing.T) {
 		wantBody     string
 	}{
 		{"GET", "/healthz", 200, `{"status":"ok"}`},
-		{"GET", "/readyz", 200, `{"status":"ready"}`},
+		{"GET", "/readyz", 200, `{"status":"ready","store":"ok"}`},
 		{"GET", "/v1/messages", 404, `{"error":{"message":"Tollgate has no endpoint for GET /v1/messages.`},
 		{"POST", "/v1/embeddings", 404, `{"error":{"message":"Tollgate has no endpoint for POST /v1/embeddings.`},
 	} {

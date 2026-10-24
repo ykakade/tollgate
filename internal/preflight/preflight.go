@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 )
 
 // Errors of Decode.
@@ -35,6 +36,10 @@ type Request struct {
 	Model string
 	// Stream is true if the client asked for a stream.
 	Stream bool
+	// MaxTokens is the output token limit of the request: max_tokens, or
+	// max_completion_tokens of the OpenAI API, which has priority. It is 0
+	// if the body has no limit, or a limit that is not a positive integer.
+	MaxTokens int64
 
 	body          []byte
 	objectStart   int // the offset after the "{" of the top-level object
@@ -56,6 +61,7 @@ func Decode(body []byte) (*Request, error) {
 	}
 	r.objectStart = int(dec.InputOffset())
 	hasModel := false
+	var maxTokens, maxCompletion int64
 	for dec.PeekKind() != '}' {
 		tok, err := dec.ReadToken()
 		if err != nil {
@@ -64,6 +70,17 @@ func Decode(body []byte) (*Request, error) {
 		// A token is valid only until the next read, so copy the name.
 		name := tok.String()
 		switch name {
+		case "max_tokens", "max_completion_tokens":
+			v, err := dec.ReadValue()
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrNotJSON, err)
+			}
+			n := positiveInt(v)
+			if name == "max_tokens" {
+				maxTokens = n
+			} else {
+				maxCompletion = n
+			}
 		case "model", "stream", "stream_options":
 			v, err := dec.ReadValue()
 			if err != nil {
@@ -108,7 +125,24 @@ func Decode(body []byte) (*Request, error) {
 	if !hasModel || r.Model == "" {
 		return nil, ErrNoModel
 	}
+	r.MaxTokens = maxTokens
+	if maxCompletion > 0 {
+		r.MaxTokens = maxCompletion
+	}
 	return r, nil
+}
+
+// positiveInt returns the value of a JSON number that is a positive
+// integer, or 0.
+func positiveInt(v jsontext.Value) int64 {
+	if v.Kind() != '0' {
+		return 0
+	}
+	n, err := strconv.ParseInt(string(v), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // edit replaces the bytes of a span with text. An insert has start == end.

@@ -7,10 +7,13 @@ One Go binary that controls cost, rate limits, and failover for the Anthropic an
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 > [!NOTE]
-> Status: alpha. Tollgate sends requests to one provider for each model. It has no rate limits, budgets or fallback yet. The configuration format can change before v1.0.
+> Status: alpha. Tollgate sends requests to one provider for each model. It has no fallback yet. The configuration format can change before v1.0.
 
 ## What Tollgate does
 
+- **Controls cost.** Set a budget for each tenant, for each month and for each agent session. When a hard budget has no money left, Tollgate refuses the request with status 402. See [rate limits and budgets](docs/limits.md).
+- **Limits traffic.** Set limits for requests and tokens per minute. The limits stay correct when you run more than one Tollgate copy with Redis.
+- **Records the cost of each request.** Tollgate calculates the cost from a price table, and writes one usage event for each request to a JSONL file. A restart keeps the spend of the month.
 - **Does not change requests.** Anthropic `/v1/messages` and OpenAI `/v1/chat/completions` requests go through in their native format. Streams go to the client byte for byte.
 - **Uses its own keys.** Clients send a Tollgate key. Tollgate stores only the hash of the key, and sends the provider key from the environment.
 - **Records the tokens of each request.** Tollgate reads the usage from each response, with cache tokens, and writes one JSON log line for each request.

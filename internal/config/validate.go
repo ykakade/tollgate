@@ -2,12 +2,16 @@ package config
 
 import (
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/url"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/ykakade/tollgate"
+	"github.com/ykakade/tollgate/internal/pricing"
 )
 
 // nameRE is the syntax of provider, tenant and key names. These names go
@@ -31,9 +35,104 @@ func (v *validator) validate(c *Config) {
 		v.add(v.line("version"), "The version %d is not supported. Use version 1.", c.Version)
 	}
 	v.validateServer(&c.Server)
+	v.validateStore(&c.Store)
+	v.validateUsage(&c.Usage)
+	c.Prices = v.loadPrices(&c.Pricing)
+	if r := c.Reservation.OutputTokens; r < 0 || r > maxReserveOutputTokens {
+		v.add(v.line("reservation", "output_tokens"), "The value of reservation.output_tokens is not valid. Use a number from 1 to %d.", maxReserveOutputTokens)
+	}
 	v.validateProviders(c.Providers)
 	routeModels := v.validateRoutes(c.Routes, c.Providers)
 	v.validateTenants(c.Tenants, routeModels)
+	v.validatePrices(c)
+}
+
+func (v *validator) validateStore(s *Store) {
+	switch s.Kind {
+	case StoreMemory:
+		if s.RedisURL.IsSet() {
+			v.add(v.line("store", "redis_url"), "The store kind is memory, but the store has a redis_url. Remove redis_url, or set kind to redis.")
+		}
+	case StoreRedis:
+		if !s.RedisURL.IsSet() {
+			v.add(v.line("store"), "The store kind is redis, but the store has no redis_url. Add redis_url, for example env:REDIS_URL.")
+			return
+		}
+		v.resolveSecret(&s.RedisURL, "The redis_url of the store", "the URL of the Redis server")
+		if s.RedisURL.value != "" {
+			u, err := url.Parse(s.RedisURL.value)
+			if err != nil || (u.Scheme != "redis" && u.Scheme != "rediss") || u.Host == "" {
+				// Do not show the value: the URL can have a password.
+				v.add(s.RedisURL.line, "The redis_url of the store is not a Redis URL. Use the format redis://host:port/0 or rediss://host:port/0.")
+			}
+		}
+	default:
+		v.add(v.line("store", "kind"), "The store kind %q is not known. Use memory or redis.", s.Kind)
+	}
+}
+
+func (v *validator) validateUsage(u *Usage) {
+	switch u.Sink {
+	case SinkJSONL:
+		if !filepath.IsAbs(u.Path) {
+			u.Path = filepath.Join(v.dir, u.Path)
+		}
+	case SinkNone:
+	case "postgres":
+		v.add(v.line("usage", "sink"), "The usage sink postgres is not available in this version. Use jsonl or none.")
+	default:
+		v.add(v.line("usage", "sink"), "The usage sink %q is not known. Use jsonl or none.", u.Sink)
+	}
+	if u.QueueSize < 0 || u.QueueSize > maxUsageQueueSize {
+		v.add(v.line("usage", "queue_size"), "The value of usage.queue_size is not valid. Use a number from 1 to %d.", maxUsageQueueSize)
+	}
+}
+
+// loadPrices reads the price table of the configuration, or the table in
+// the binary.
+func (v *validator) loadPrices(p *Pricing) *pricing.Table {
+	name, data := "pricing.yaml (in the binary)", tollgate.PriceTable()
+	if p.File != "" {
+		if !filepath.IsAbs(p.File) {
+			p.File = filepath.Join(v.dir, p.File)
+		}
+		name = p.File
+		var err error
+		if data, err = v.env.ReadFile(p.File); err != nil {
+			v.add(v.line("pricing", "file"), "Tollgate cannot read the price table %s. Make sure that the file exists and that Tollgate can read it.", p.File)
+			return nil
+		}
+	}
+	t, errs := pricing.Parse(data)
+	for _, e := range errs {
+		v.errs = append(v.errs, Error{File: name, Line: e.Line, Message: e.Message})
+	}
+	return t
+}
+
+// validatePrices checks that each model that a tenant with a budget can
+// use has a price.
+func (v *validator) validatePrices(c *Config) {
+	if c.Prices == nil {
+		return
+	}
+	targets := make(map[string][]Target)
+	for _, r := range c.Routes {
+		targets[r.Model] = append(targets[r.Model], r.Targets...)
+	}
+	for i, t := range c.Tenants {
+		if len(t.Budgets) == 0 {
+			continue
+		}
+		for j, m := range t.Models {
+			for _, tg := range targets[m] {
+				p, ok := c.Providers[tg.Provider]
+				if ok && !c.Prices.Has(tg.Provider, p.Kind, tg.Model) {
+					v.add(v.line("tenants", i, "models", j), "The tenant %q has a budget, but the price table has no price for the model %q of the provider %q. Add an entry to the price table. See docs/configuration.md.", t.ID, tg.Model, tg.Provider)
+				}
+			}
+		}
+	}
 }
 
 func (v *validator) validateServer(s *Server) {
@@ -66,7 +165,7 @@ func (v *validator) validateProviders(providers map[string]Provider) {
 			v.add(v.line("providers", name, "kind"), "The provider kind %q is not known. Use anthropic or openai.", p.Kind)
 		}
 		v.validateBaseURL(name, p)
-		v.resolveSecret(&p.APIKey, name)
+		v.resolveSecret(&p.APIKey, fmt.Sprintf("The api_key of the provider %q", name), fmt.Sprintf("the API key of the provider %q", name))
 		providers[name] = p
 	}
 }
@@ -91,8 +190,10 @@ func (v *validator) validateBaseURL(name string, p Provider) {
 }
 
 // resolveSecret reads the value of a secret reference. It accepts only
-// env: and file: references (ADR 0012).
-func (v *validator) resolveSecret(s *Secret, provider string) {
+// env: and file: references (ADR 0012). The field names the reference in
+// messages, for example `The api_key of the provider "anthropic"`, and the
+// value says what the secret holds.
+func (v *validator) resolveSecret(s *Secret, field, value string) {
 	if !s.IsSet() {
 		return
 	}
@@ -102,15 +203,15 @@ func (v *validator) resolveSecret(s *Secret, provider string) {
 		val, ok := v.env.LookupEnv(ref)
 		switch {
 		case ref == "":
-			v.add(s.line, "The api_key of the provider %q has no variable name. Use env:NAME.", provider)
+			v.add(s.line, "%s has no variable name. Use env:NAME.", field)
 		case !ok || val == "":
-			v.add(s.line, "The environment variable %s is not set. Set it to the API key of the provider %q.", ref, provider)
+			v.add(s.line, "The environment variable %s is not set. Set it to %s.", ref, value)
 		default:
 			s.value = val
 		}
 	case "file":
 		if ref == "" {
-			v.add(s.line, "The api_key of the provider %q has no file path. Use file:/path.", provider)
+			v.add(s.line, "%s has no file path. Use file:/path.", field)
 			return
 		}
 		if !filepath.IsAbs(ref) {
@@ -120,14 +221,14 @@ func (v *validator) resolveSecret(s *Secret, provider string) {
 		val := strings.TrimSpace(string(data))
 		switch {
 		case err != nil:
-			v.add(s.line, "Tollgate cannot read the key file %s of the provider %q. Make sure that the file exists and that Tollgate can read it.", ref, provider)
+			v.add(s.line, "Tollgate cannot read the file %s that has %s. Make sure that the file exists and that Tollgate can read it.", ref, value)
 		case val == "":
-			v.add(s.line, "The key file %s of the provider %q is empty.", ref, provider)
+			v.add(s.line, "The file %s that has %s is empty.", ref, value)
 		default:
 			s.value = val
 		}
 	default:
-		v.add(s.line, "The api_key of the provider %q is not a reference. Do not put keys in the file. Use env:NAME or file:/path.", provider)
+		v.add(s.line, "%s is not a reference. Do not put secrets in the file. Use env:NAME or file:/path.", field)
 	}
 }
 
@@ -232,6 +333,7 @@ func (v *validator) validateTenants(tenants []Tenant, routeModels map[string]boo
 		if len(t.Models) == 0 {
 			v.add(line, "The tenant %q has no models. Add one route model or more to models.", t.ID)
 		}
+		v.validateLimits(i, t)
 		for j, m := range t.Models {
 			switch {
 			case m == "":
@@ -239,6 +341,36 @@ func (v *validator) validateTenants(tenants []Tenant, routeModels map[string]boo
 			case !routeModels[m]:
 				v.add(v.line("tenants", i, "models", j), "The model %q of the tenant %q has no route. Add a route for it, or remove it from models.", m, t.ID)
 			}
+		}
+	}
+}
+
+func (v *validator) validateLimits(i int, t Tenant) {
+	if l := t.Limits.RequestsPerMinute; l < 0 || l > maxRequestsPerMinute {
+		v.add(v.line("tenants", i, "limits", "requests_per_minute"), "The requests_per_minute of the tenant %q is not valid. Use a number from 0 (no limit) to %d.", t.ID, maxRequestsPerMinute)
+	}
+	if l := t.Limits.TokensPerMinute; l < 0 || l > maxTokensPerMinute {
+		v.add(v.line("tenants", i, "limits", "tokens_per_minute"), "The tokens_per_minute of the tenant %q is not valid. Use a number from 0 (no limit) to %d.", t.ID, int64(maxTokensPerMinute))
+	}
+	windows := make(map[string]bool)
+	for j, b := range t.Budgets {
+		line := v.line("tenants", i, "budgets", j)
+		switch b.Window {
+		case WindowMonth, WindowSession:
+			if windows[b.Window] {
+				v.add(v.line("tenants", i, "budgets", j, "window"), "The tenant %q has two %s budgets. Remove one of them.", t.ID, b.Window)
+			}
+			windows[b.Window] = true
+		case "":
+			v.add(line, "A budget of the tenant %q has no window. Set window to month or session.", t.ID)
+		default:
+			v.add(v.line("tenants", i, "budgets", j, "window"), "The budget window %q of the tenant %q is not known. Use month or session.", b.Window, t.ID)
+		}
+		if b.LimitUSD <= 0 {
+			v.add(v.line("tenants", i, "budgets", j, "limit_usd"), "The %s budget of the tenant %q has no limit_usd. Set limit_usd to an amount more than 0.", b.Window, t.ID)
+		}
+		if b.Mode != ModeHard && b.Mode != ModeSoft {
+			v.add(v.line("tenants", i, "budgets", j, "mode"), "The budget mode %q of the tenant %q is not known. Use hard or soft.", b.Mode, t.ID)
 		}
 	}
 }

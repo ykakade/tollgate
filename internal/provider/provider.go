@@ -25,6 +25,10 @@ type Usage struct {
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+	// CacheWrite1hTokens are the part of CacheWriteTokens that the
+	// provider wrote to its 1-hour prompt cache. Only Anthropic reports
+	// them.
+	CacheWrite1hTokens int64
 	// ReasoningTokens are the part of OutputTokens that the model used to
 	// reason. Only some providers report them.
 	ReasoningTokens int64

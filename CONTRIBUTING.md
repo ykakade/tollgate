@@ -8,6 +8,7 @@ This page tells you how to make a change to Tollgate and how to send it for revi
 - GNU Make
 - [golangci-lint](https://golangci-lint.run) v2
 - A C compiler, for the race detector. Without a C compiler, `make test` runs the tests without the race detector.
+- Redis, for the Redis store tests and the cluster tests. Set `TOLLGATE_TEST_REDIS_URL`, for example to `redis://localhost:6379/0`. If the variable is not set, these tests use only the memory store, or they are skipped. CI always sets it.
 - [lychee](https://lychee.cli.rs), for `make links`. This is optional. CI also runs the link check.
 
 ## Procedure

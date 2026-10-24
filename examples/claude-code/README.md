@@ -28,10 +28,15 @@ Prerequisites:
    ```sh
    export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
    export ANTHROPIC_AUTH_TOKEN=<your Tollgate key>
+   export ANTHROPIC_CUSTOM_HEADERS="x-tollgate-session: my-task"
    claude
    ```
 
-Result: Claude Code works as usual. Tollgate writes one log line for each request, with the tokens of the request.
+   The third line is optional. It gives all requests from this shell one session ID, so that the session budget applies.
+
+Result: Claude Code works as usual. Tollgate writes one log line for each request, with the tokens and the cost of the request. The file `data/usage.jsonl` gets one line for each request.
+
+If the month budget or the session budget has no money left, Claude Code shows an error with the type `budget_exceeded`. To continue, increase `limit_usd`, or start a new session with a new value of `x-tollgate-session`. Then restart Tollgate if you changed the file.
 
 If Claude Code shows `The key cannot use the model`, read the model name in the message. Add a route for that model, and add the model to the `models` list of the tenant. Then restart Tollgate.
 

@@ -19,6 +19,7 @@ var anthropicTypes = map[int]string{
 	http.StatusMethodNotAllowed:      "invalid_request_error",
 	http.StatusRequestEntityTooLarge: "request_too_large",
 	http.StatusTooManyRequests:       "rate_limit_error",
+	http.StatusPaymentRequired:       "budget_exceeded",
 }
 
 // openaiTypes maps a status to the error type and code of the OpenAI API.
@@ -30,6 +31,7 @@ var openaiTypes = map[int][2]string{
 	http.StatusMethodNotAllowed:      {"invalid_request_error", "method_not_allowed"},
 	http.StatusRequestEntityTooLarge: {"invalid_request_error", "request_too_large"},
 	http.StatusTooManyRequests:       {"rate_limit_error", "rate_limit_exceeded"},
+	http.StatusPaymentRequired:       {"budget_exceeded", "budget_exceeded"},
 }
 
 type anthropicDetail struct {

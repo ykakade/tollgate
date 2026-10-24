@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -25,6 +26,21 @@ import (
 // openaiParams.
 func newGateway(t *testing.T, upstream string) (string, string) {
 	t.Helper()
+	url, key, _ := newGatewayWith(t, upstream, "")
+	return url, key
+}
+
+// sdkPrices is the price table of the gateways with a budget.
+const sdkPrices = `
+- {provider: anthropic, model: claude-test, effective_from: 2026-01-01, micro_usd_per_mtok: {input: 1000000, output: 2000000}}
+- {provider: openai, model: gpt-test, effective_from: 2026-01-01, micro_usd_per_mtok: {input: 1000000, output: 2000000}}
+`
+
+// newGatewayWith is newGateway with more fields for the tenant, for
+// example limits and budgets. It also returns a counter of the requests
+// that reach Tollgate.
+func newGatewayWith(t *testing.T, upstream, tenant string) (string, string, *atomic.Int64) {
+	t.Helper()
 	key, err := auth.NewRandomKey()
 	if err != nil {
 		t.Fatal(err)
@@ -36,11 +52,16 @@ providers:
 routes:
   - {model: claude-test, api: anthropic, targets: [{provider: anthropic}], timeouts: {idle: 300ms}}
   - {model: gpt-test, api: openai, targets: [{provider: openai}], timeouts: {idle: 300ms}}
+pricing: {file: prices.yaml}
 tenants:
-  - {id: t, keys: [{id: k, hash: %[2]s}], models: [claude-test, gpt-test]}
-`, upstream, auth.Hash(key))
+  - id: t
+    keys: [{id: k, hash: %[2]s}]
+    models: [claude-test, gpt-test]
+%[3]s
+`, upstream, auth.Hash(key), tenant)
 	cfg, err := config.Parse("sdk.yaml", []byte(yaml), config.Env{
 		LookupEnv: func(string) (string, bool) { return "provider-key", true },
+		ReadFile:  func(string) ([]byte, error) { return []byte(sdkPrices), nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -53,9 +74,14 @@ tenants:
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(srv.Handler())
+	var hits atomic.Int64
+	h := srv.Handler()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		h.ServeHTTP(w, r)
+	}))
 	t.Cleanup(ts.Close)
-	return ts.URL, key
+	return ts.URL, key, &hits
 }
 
 func gatewayAnthropic(t *testing.T, upstream string) anthropic.Client {
@@ -125,6 +151,46 @@ func TestGatewayErrorsParse(t *testing.T) {
 	_, err = o.Chat.Completions.New(t.Context(), openaiParams())
 	if apiErr, ok := errors.AsType[*openai.Error](err); !ok || apiErr.StatusCode != http.StatusUnauthorized || apiErr.Code != "invalid_api_key" {
 		t.Errorf("openai error = %v, want a 401 with code invalid_api_key", err)
+	}
+}
+
+func TestGatewayRateLimitErrorsParse(t *testing.T) {
+	url, key, _ := newGatewayWith(t, newFakeProvider(t).URL, "    limits: {requests_per_minute: 1}")
+	a := anthropic.NewClient(aoption.WithBaseURL(url), aoption.WithAPIKey(key), aoption.WithMaxRetries(0))
+	if _, err := a.Messages.New(t.Context(), anthropicParams()); err != nil {
+		t.Fatalf("first request: %v", err)
+	}
+	_, err := a.Messages.New(t.Context(), anthropicParams())
+	if apiErr, ok := errors.AsType[*anthropic.Error](err); !ok || apiErr.StatusCode != http.StatusTooManyRequests || apiErr.Type() != "rate_limit_error" || apiErr.Response.Header.Get("Retry-After") == "" {
+		t.Errorf("anthropic error = %v, want a 429 rate_limit_error with retry-after", err)
+	}
+	o := openai.NewClient(ooption.WithBaseURL(url+"/v1"), ooption.WithAPIKey(key), ooption.WithMaxRetries(0))
+	_, err = o.Chat.Completions.New(t.Context(), openaiParams())
+	if apiErr, ok := errors.AsType[*openai.Error](err); !ok || apiErr.StatusCode != http.StatusTooManyRequests || apiErr.Code != "rate_limit_exceeded" || apiErr.Type != "rate_limit_error" {
+		t.Errorf("openai error = %v, want a 429 with code rate_limit_exceeded", err)
+	}
+}
+
+// TestGatewayBudgetErrorNotRetried checks that the SDKs read the 402
+// error and do not send the request again, so that an agent stops at once.
+func TestGatewayBudgetErrorNotRetried(t *testing.T) {
+	url, key, hits := newGatewayWith(t, newFakeProvider(t).URL, "    budgets: [{window: month, limit_usd: 0.000001}]")
+	// The SDKs retry 2 times by default.
+	a := anthropic.NewClient(aoption.WithBaseURL(url), aoption.WithAPIKey(key))
+	_, err := a.Messages.New(t.Context(), anthropicParams())
+	if apiErr, ok := errors.AsType[*anthropic.Error](err); !ok || apiErr.StatusCode != http.StatusPaymentRequired || apiErr.Type() != "budget_exceeded" {
+		t.Errorf("anthropic error = %v, want a 402 budget_exceeded", err)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("the Anthropic SDK sent %d requests, want 1", n)
+	}
+	o := openai.NewClient(ooption.WithBaseURL(url+"/v1"), ooption.WithAPIKey(key))
+	_, err = o.Chat.Completions.New(t.Context(), openaiParams())
+	if apiErr, ok := errors.AsType[*openai.Error](err); !ok || apiErr.StatusCode != http.StatusPaymentRequired || apiErr.Code != "budget_exceeded" {
+		t.Errorf("openai error = %v, want a 402 with code budget_exceeded", err)
+	}
+	if n := hits.Load(); n != 2 {
+		t.Errorf("the OpenAI SDK sent %d requests, want 1", n-1)
 	}
 }
 

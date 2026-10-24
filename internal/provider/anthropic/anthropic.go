@@ -41,6 +41,9 @@ type usage struct {
 	CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
 	OutputTokens             *int64 `json:"output_tokens"`
+	CacheCreation            *struct {
+		Ephemeral1hInputTokens *int64 `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
 }
 
 // merge copies the fields that next has into u. The message_delta event
@@ -56,6 +59,9 @@ func (u *usage) merge(next *usage) {
 			*f.dst = *f.src
 		}
 	}
+	if next.CacheCreation != nil && next.CacheCreation.Ephemeral1hInputTokens != nil {
+		u.CacheCreation = next.CacheCreation
+	}
 }
 
 func (u *usage) value() provider.Usage {
@@ -65,11 +71,16 @@ func (u *usage) value() provider.Usage {
 		}
 		return *p
 	}
+	var write1h int64
+	if u.CacheCreation != nil {
+		write1h = get(u.CacheCreation.Ephemeral1hInputTokens)
+	}
 	return provider.Usage{
-		InputTokens:      get(u.InputTokens),
-		OutputTokens:     get(u.OutputTokens),
-		CacheReadTokens:  get(u.CacheReadInputTokens),
-		CacheWriteTokens: get(u.CacheCreationInputTokens),
+		InputTokens:        get(u.InputTokens),
+		OutputTokens:       get(u.OutputTokens),
+		CacheReadTokens:    get(u.CacheReadInputTokens),
+		CacheWriteTokens:   get(u.CacheCreationInputTokens),
+		CacheWrite1hTokens: write1h,
 	}
 }
 

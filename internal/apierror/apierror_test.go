@@ -18,6 +18,9 @@ func TestBody(t *testing.T) {
 		{config.APIAnthropic, 502, `{"type":"error","error":{"type":"api_error","message":"m"}}`},
 		{config.APIOpenAI, 403, `{"error":{"message":"m","type":"invalid_request_error","param":null,"code":"model_not_allowed"}}`},
 		{config.APIOpenAI, 503, `{"error":{"message":"m","type":"server_error","param":null,"code":"gateway_error"}}`},
+		{config.APIAnthropic, 429, `{"type":"error","error":{"type":"rate_limit_error","message":"m"}}`},
+		{config.APIAnthropic, 402, `{"type":"error","error":{"type":"budget_exceeded","message":"m"}}`},
+		{config.APIOpenAI, 402, `{"error":{"message":"m","type":"budget_exceeded","param":null,"code":"budget_exceeded"}}`},
 	}
 	for _, tt := range tests {
 		if got := string(Body(tt.api, tt.status, "m")); got != tt.want {

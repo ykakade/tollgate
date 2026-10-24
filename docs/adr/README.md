@@ -23,6 +23,9 @@ Each record has a number, a status, and a date. To change a decision, write a ne
 | [0015](0015-sdk-test-module.md) | Keep SDK tests in a separate Go module | Accepted |
 | [0016](0016-timeouts.md) | Define the four timeouts of an upstream request | Accepted |
 | [0017](0017-body-edits.md) | Edit request bodies in place, without a new encode | Accepted |
+| [0018](0018-reservation-size.md) | Reserve a capped output, and document the overspend bound | Accepted |
+| [0019](0019-rebuild-spend.md) | Rebuild the spend from the usage file at start | Accepted |
+| [0020](0020-readyz-store.md) | Keep /readyz ready when the limit store fails | Accepted |
 
 ## Template
 

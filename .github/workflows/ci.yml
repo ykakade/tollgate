@@ -16,6 +16,19 @@ jobs:
   test:
     name: Build and test
     runs-on: ubuntu-latest
+    services:
+      # The Redis store tests and the cluster tests use this server.
+      redis:
+        image: redis:8.8.3-alpine@sha256:dc95ea2fcf5d5c4253be0f967c28143d0f625846197eed2fd32c748eb99abfca
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      TOLLGATE_TEST_REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/ykakade/tollgate/internal/pricing"
 )
 
 // API is the wire format of a route.
@@ -47,6 +49,43 @@ const (
 	DefaultFirstTokenTimeout = 30 * time.Second
 	DefaultIdleTimeout       = 60 * time.Second
 	DefaultTotalTimeout      = 15 * time.Minute
+
+	DefaultUsagePath           = "./data/usage.jsonl"
+	DefaultUsageQueueSize      = 10000
+	DefaultReserveOutputTokens = 4096
+)
+
+// Store kinds.
+const (
+	StoreMemory = "memory"
+	StoreRedis  = "redis"
+)
+
+// Usage sinks.
+const (
+	SinkJSONL = "jsonl"
+	SinkNone  = "none"
+)
+
+// Budget windows.
+const (
+	WindowMonth   = "month"
+	WindowSession = "session"
+)
+
+// Budget modes.
+const (
+	ModeHard = "hard"
+	ModeSoft = "soft"
+)
+
+// Upper limits of numeric fields. With these limits, the limit store can
+// do its arithmetic in float64 without a loss, as Redis Lua does.
+const (
+	maxUsageQueueSize      = 1_000_000
+	maxReserveOutputTokens = 10_000_000
+	maxRequestsPerMinute   = 1_000_000_000
+	maxTokensPerMinute     = 10_000_000_000
 )
 
 // maxBodyBytesLimit is the largest value of server.max_body_bytes.
@@ -63,11 +102,51 @@ var laterKinds = map[string]bool{"vertex": true, "bedrock": true}
 
 // Config is the complete configuration.
 type Config struct {
-	Version   int                 `yaml:"version"`
-	Server    Server              `yaml:"server"`
-	Providers map[string]Provider `yaml:"providers"`
-	Routes    []Route             `yaml:"routes"`
-	Tenants   []Tenant            `yaml:"tenants"`
+	Version     int                 `yaml:"version"`
+	Server      Server              `yaml:"server"`
+	Store       Store               `yaml:"store"`
+	Usage       Usage               `yaml:"usage"`
+	Pricing     Pricing             `yaml:"pricing"`
+	Reservation Reservation         `yaml:"reservation"`
+	Providers   map[string]Provider `yaml:"providers"`
+	Routes      []Route             `yaml:"routes"`
+	Tenants     []Tenant            `yaml:"tenants"`
+
+	// Prices is the price table: the file in Pricing.File, or the table
+	// in the binary.
+	Prices *pricing.Table `yaml:"-"`
+}
+
+// Store holds the settings of the limit store (ADR 0004).
+type Store struct {
+	// Kind is StoreMemory or StoreRedis.
+	Kind     string `yaml:"kind"`
+	RedisURL Secret `yaml:"redis_url"`
+}
+
+// Usage holds the settings of the usage events.
+type Usage struct {
+	// Sink is SinkJSONL or SinkNone.
+	Sink string `yaml:"sink"`
+	// Path is the JSONL file. Load makes a relative path relative to the
+	// directory of the configuration file.
+	Path      string `yaml:"path"`
+	QueueSize int    `yaml:"queue_size"`
+}
+
+// Pricing holds the settings of the price table.
+type Pricing struct {
+	// File is the price table. If it is empty, Tollgate uses the table in
+	// the binary. Load makes a relative path relative to the directory of
+	// the configuration file.
+	File string `yaml:"file"`
+}
+
+// Reservation holds the settings of budget reservations (ADR 0018).
+type Reservation struct {
+	// OutputTokens is the largest number of output tokens that a request
+	// reserves. A request with a lower max_tokens reserves that number.
+	OutputTokens int64 `yaml:"output_tokens"`
 }
 
 // Server holds the settings of the data plane listener.
@@ -108,9 +187,37 @@ type Timeouts struct {
 
 // Tenant is a user or a team with its own keys.
 type Tenant struct {
-	ID     string   `yaml:"id"`
-	Keys   []Key    `yaml:"keys"`
-	Models []string `yaml:"models"`
+	ID      string   `yaml:"id"`
+	Keys    []Key    `yaml:"keys"`
+	Models  []string `yaml:"models"`
+	Limits  Limits   `yaml:"limits"`
+	Budgets []Budget `yaml:"budgets"`
+}
+
+// Limits are the rate limits of a tenant. A value of 0 means no limit.
+type Limits struct {
+	RequestsPerMinute int64 `yaml:"requests_per_minute"`
+	TokensPerMinute   int64 `yaml:"tokens_per_minute"`
+}
+
+// Budget is the largest spend of a tenant in a window.
+type Budget struct {
+	// Window is WindowMonth or WindowSession.
+	Window string `yaml:"window"`
+	// LimitUSD is the limit in micro-USD.
+	LimitUSD USD `yaml:"limit_usd"`
+	// Mode is ModeHard or ModeSoft.
+	Mode string `yaml:"mode"`
+}
+
+// HasHardBudget reports whether the tenant has a hard budget.
+func (t *Tenant) HasHardBudget() bool {
+	for _, b := range t.Budgets {
+		if b.Mode == ModeHard {
+			return true
+		}
+	}
+	return false
 }
 
 // Key is one virtual key of a tenant. Hash is "sha256:" and the hex SHA-256
@@ -197,6 +304,28 @@ func (c *Config) applyDefaults() {
 	if c.Server.DrainTimeout == 0 {
 		c.Server.DrainTimeout = Duration(DefaultDrainTimeout)
 	}
+	if c.Store.Kind == "" {
+		c.Store.Kind = StoreMemory
+	}
+	if c.Usage.Sink == "" {
+		c.Usage.Sink = SinkJSONL
+	}
+	if c.Usage.Path == "" {
+		c.Usage.Path = DefaultUsagePath
+	}
+	if c.Usage.QueueSize == 0 {
+		c.Usage.QueueSize = DefaultUsageQueueSize
+	}
+	if c.Reservation.OutputTokens == 0 {
+		c.Reservation.OutputTokens = DefaultReserveOutputTokens
+	}
+	for i := range c.Tenants {
+		for j := range c.Tenants[i].Budgets {
+			if c.Tenants[i].Budgets[j].Mode == "" {
+				c.Tenants[i].Budgets[j].Mode = ModeHard
+			}
+		}
+	}
 	for name, p := range c.Providers {
 		if p.BaseURL == "" {
 			p.BaseURL = defaultBaseURLs[p.Kind]
@@ -224,8 +353,12 @@ func setDefault(d *Duration, def time.Duration) {
 	}
 }
 
-// Error is one problem in the configuration file.
+// Error is one problem in the configuration file, or in a file that it
+// names.
 type Error struct {
+	// File is the file of the problem, if it is not the configuration
+	// file.
+	File    string
 	Line    int // 0 if the problem has no line
 	Message string
 }
@@ -243,7 +376,11 @@ func (e *ValidationError) Error() string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(e.File)
+		if ce.File != "" {
+			b.WriteString(ce.File)
+		} else {
+			b.WriteString(e.File)
+		}
 		if ce.Line > 0 {
 			b.WriteByte(':')
 			b.WriteString(strconv.Itoa(ce.Line))
@@ -277,7 +414,13 @@ func (v *validator) result() error {
 	if len(v.errs) == 0 {
 		return nil
 	}
-	sort.SliceStable(v.errs, func(i, j int) bool { return v.errs[i].Line < v.errs[j].Line })
+	sort.SliceStable(v.errs, func(i, j int) bool {
+		a, b := v.errs[i], v.errs[j]
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		return a.Line < b.Line
+	})
 	return &ValidationError{File: v.file, Errors: v.errs}
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ykakade/tollgate/internal/apierror"
 	"github.com/ykakade/tollgate/internal/auth"
+	"github.com/ykakade/tollgate/internal/budget"
 	"github.com/ykakade/tollgate/internal/config"
 	"github.com/ykakade/tollgate/internal/preflight"
 	"github.com/ykakade/tollgate/internal/provider"
@@ -58,6 +59,19 @@ type exchange struct {
 	bytesOut      int64
 	upstreamID    string
 	err           error
+
+	session string
+	// cost is the cost of the request in micro-USD.
+	cost int64
+	// limitHeader holds the rate limit headers of the response.
+	limitHeader http.Header
+	// denied is the limit that stopped the request, for the access log.
+	denied string
+	// wrote is true if the response status went to the client.
+	wrote bool
+	// incomplete is true if the response stopped after its first byte,
+	// so the provider can have used more tokens than the usage shows.
+	incomplete bool
 }
 
 // begin starts the exchange and sets the x-request-id header.
@@ -70,6 +84,7 @@ func (s *Server) begin(w http.ResponseWriter, r *http.Request, api config.API) *
 // fail sends an error response in the format of the API.
 func (x *exchange) fail(status int, message string, retryAfter int) {
 	x.status = status
+	x.wrote = true
 	apierror.Write(x.w, x.api, status, message, retryAfter)
 }
 
@@ -85,6 +100,9 @@ func (s *Server) finish(ctx context.Context, x *exchange) {
 	}
 	if x.identity.TenantID != "" {
 		args = append(args, "tenant_id", x.identity.TenantID, "key_id", x.identity.KeyID)
+	}
+	if x.session != "" {
+		args = append(args, "session_id", x.session)
 	}
 	if x.routeModel != "" {
 		args = append(args, "api", string(x.api), "route_model", x.routeModel, "stream", x.stream)
@@ -107,7 +125,11 @@ func (s *Server) finish(ctx context.Context, x *exchange) {
 			"cache_write_tokens", x.usage.CacheWriteTokens,
 			"reasoning_tokens", x.usage.ReasoningTokens,
 			"usage_estimated", x.estimated,
+			"cost_micro_usd", x.cost,
 		)
+	}
+	if x.denied != "" {
+		args = append(args, "denied_by", x.denied)
 	}
 	if x.ttft >= 0 {
 		args = append(args, "ttft_ms", x.ttft.Milliseconds())
@@ -119,6 +141,9 @@ func (s *Server) finish(ctx context.Context, x *exchange) {
 		args = append(args, "error", x.err.Error())
 	}
 	s.logger.InfoContext(ctx, "request done", args...)
+	if s.usage != nil && x.identity.TenantID != "" && x.routeModel != "" {
+		s.usage.Emit(x.event())
+	}
 }
 
 func (s *Server) proxy(ep endpoint) http.Handler {
@@ -168,7 +193,12 @@ func (s *Server) serveProxy(ctx context.Context, x *exchange, ep endpoint) {
 		return
 	}
 	x.routeModel, x.stream = pre.Model, pre.Stream
-	if !s.tenants[x.identity.TenantID][pre.Model] {
+	if x.session = r.Header.Get("X-Tollgate-Session"); x.session != "" && !budget.ValidSession(x.session) {
+		x.session = ""
+		x.fail(http.StatusBadRequest, "The x-tollgate-session header is not valid. Use 1 to 128 visible ASCII characters, with no spaces.", 0)
+		return
+	}
+	if !s.tenants[x.identity.TenantID].models[pre.Model] {
 		x.fail(http.StatusForbidden, fmt.Sprintf("The key cannot use the model %q. Use a model that the configuration of the tenant allows.", pre.Model), 0)
 		return
 	}
@@ -183,6 +213,12 @@ func (s *Server) serveProxy(ctx context.Context, x *exchange, ep endpoint) {
 		x.fail(http.StatusBadRequest, decodeMessage(err), 0)
 		return
 	}
+	adm, ok := s.admit(ctx, x, ep, rt, pre, len(upBody))
+	if !ok {
+		return
+	}
+	defer s.settle(ctx, x, adm)
+	defer x.flush()
 	x.provider, x.providerModel, x.attempts = rt.target.Provider, rt.target.Model, 1
 
 	a := relay.Start(ctx, rt.timeouts)
@@ -232,6 +268,7 @@ func (s *Server) serveProxy(ctx context.Context, x *exchange, ep endpoint) {
 			return
 		}
 		x.err = copyErr
+		x.incomplete = true
 		if isStream && ok2xx && ctx.Err() == nil && !errors.Is(copyErr, relay.ErrClientWrite) {
 			s.writeStreamError(x, rt, meter, copyErr)
 		}
@@ -269,7 +306,11 @@ func (w *responseStartWriter) commit() {
 		h.Set("X-Tollgate-Provider", w.x.provider)
 		h.Set("X-Tollgate-Model", w.x.providerModel)
 		h.Set("X-Tollgate-Attempts", "1")
+		for k, v := range w.x.limitHeader {
+			h[k] = v
+		}
 		w.x.status = w.status
+		w.x.wrote = true
 		w.WriteHeader(w.status)
 	}
 }
@@ -280,6 +321,14 @@ func (w *responseStartWriter) Write(p []byte) (int, error) {
 }
 
 func (w *responseStartWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// flush sends the buffered response bytes to the client, so that the
+// settle step after the response does not delay them.
+func (x *exchange) flush() {
+	if x.wrote {
+		_ = http.NewResponseController(x.w).Flush()
+	}
+}
 
 // readBody reads the request body up to the size limit, with a deadline.
 func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {

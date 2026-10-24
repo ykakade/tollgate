@@ -90,6 +90,36 @@ func TestRewrite(t *testing.T) {
 	}
 }
 
+func TestDecodeMaxTokens(t *testing.T) {
+	for _, tt := range []struct {
+		body string
+		want int64
+	}{
+		{`{"model":"m","max_tokens":1024}`, 1024},
+		{`{"model":"m"}`, 0},
+		{`{"model":"m","max_completion_tokens":300,"max_tokens":20}`, 300},
+		{`{"max_tokens":20,"max_completion_tokens":null,"model":"m"}`, 20},
+		{`{"model":"m","max_tokens":1.5}`, 0},
+		{`{"model":"m","max_tokens":-4}`, 0},
+		{`{"model":"m","max_tokens":"9"}`, 0},
+		{`{"model":"m","max_tokens":1e3}`, 0},
+		{`{"model":"m","max_tokens":99999999999999999999}`, 0},
+		{`{"model":"m","metadata":{"max_tokens":7}}`, 0},
+	} {
+		r, err := Decode([]byte(tt.body))
+		if err != nil {
+			t.Errorf("Decode(%s): %v", tt.body, err)
+			continue
+		}
+		if r.MaxTokens != tt.want {
+			t.Errorf("Decode(%s).MaxTokens = %d, want %d", tt.body, r.MaxTokens, tt.want)
+		}
+	}
+	if _, err := Decode([]byte(`{"model":"m","max_tokens":[}`)); !errors.Is(err, ErrNotJSON) {
+		t.Errorf("Decode() of a bad max_tokens: err = %v, want ErrNotJSON", err)
+	}
+}
+
 func TestEstimateInputTokens(t *testing.T) {
 	for n, want := range map[int]int64{0: 0, 1: 1, 4: 1, 5: 2, 4000: 1000} {
 		if got := EstimateInputTokens(n); got != want {
