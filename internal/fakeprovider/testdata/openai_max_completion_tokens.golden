@@ -1,0 +1,1 @@
+{"id":"chatcmpl-fake-000001","object":"chat.completion","created":1792843200,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"Hello from ","refusal":null},"logprobs":null,"finish_reason":"length"}],"usage":{"prompt_tokens":29,"completion_tokens":2,"total_tokens":31}}

@@ -1,0 +1,18 @@
+data: {"id":"chatcmpl-fake-000001","object":"chat.completion.chunk","created":1792843200,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-fake-000001","object":"chat.completion.chunk","created":1792843200,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"Hello "},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-fake-000001","object":"chat.completion.chunk","created":1792843200,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"from "},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-fake-000001","object":"chat.completion.chunk","created":1792843200,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"the "},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-fake-000001","object":"chat.completion.chunk","created":1792843200,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"Tollgate "},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-fake-000001","object":"chat.completion.chunk","created":1792843200,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"fake "},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-fake-000001","object":"chat.completion.chunk","created":1792843200,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"provider."},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-fake-000001","object":"chat.completion.chunk","created":1792843200,"model":"gpt-test","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}]}
+
+data: [DONE]
+

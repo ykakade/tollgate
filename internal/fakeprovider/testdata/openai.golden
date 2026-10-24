@@ -1,0 +1,1 @@
+{"id":"chatcmpl-fake-000001","object":"chat.completion","created":1792843200,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"Hello from the Tollgate fake provider.","refusal":null},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":18,"completion_tokens":6,"total_tokens":24}}
