@@ -1,0 +1,52 @@
+name: Bug report
+description: Tell us about a problem in Tollgate.
+labels: ["kind/bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, prompts, or other secrets in this report.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Paste the output of `tollgate version`.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Tell us what Tollgate did.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Tell us what you expected Tollgate to do.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Give the steps that cause the problem. Include the commands and requests.
+      placeholder: |
+        1. Start Tollgate with this configuration.
+        2. Send this request.
+        3. Look at the response.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Paste your configuration. Remove all API keys and other secrets first.
+      render: yaml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste the log lines for the request.
+      render: json

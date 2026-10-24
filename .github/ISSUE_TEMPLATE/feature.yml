@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a change or a new function.
+labels: ["kind/feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Tell us the problem that you want to solve. Do not describe the solution here.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Tell us how Tollgate can solve the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Tell us the other solutions that you examined.
