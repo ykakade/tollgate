@@ -1,0 +1,58 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - contextcheck
+    - errname
+    - errorlint
+    - forbidigo
+    - gocritic
+    - gosec
+    - misspell
+    - noctx
+    - nolintlint
+    - revive
+    - sloglint
+    - unconvert
+    - usestdlibvars
+  settings:
+    forbidigo:
+      forbid:
+        # The brief allows panic only in main packages.
+        - pattern: ^panic$
+          msg: Return an error. Use panic only in a main package.
+    misspell:
+      locale: US
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    sloglint:
+      attr-only: false
+      kv-only: true
+      context: scope
+      static-msg: true
+      key-naming-case: snake
+  exclusions:
+    generated: lax
+    presets:
+      # Allow unchecked errors from fmt.Fprint* and Close, as in the standard library.
+      - std-error-handling
+    rules:
+      - path: cmd/
+        linters: [forbidigo]
+      - path: _test\.go
+        linters: [gosec, forbidigo]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ykakade/tollgate
