@@ -1,0 +1,33 @@
+# Tollgate configuration for Claude Code.
+# See README.md in this directory.
+version: 1
+
+server:
+  listen: "127.0.0.1:8080"
+
+providers:
+  anthropic:
+    kind: anthropic
+    api_key: env:ANTHROPIC_API_KEY
+
+# Claude Code uses a main model and a small model. Add a route for each
+# model that your Claude Code uses.
+routes:
+  - model: claude-opus-5-5
+    api: anthropic
+    targets:
+      - provider: anthropic
+  - model: claude-sonnet-5-5
+    api: anthropic
+    targets:
+      - provider: anthropic
+  - model: claude-haiku-5-5
+    api: anthropic
+    targets:
+      - provider: anthropic
+
+tenants:
+  - id: personal
+    # Run "tollgate keys create -id laptop" and paste its lines here.
+    keys: []
+    models: [claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5]

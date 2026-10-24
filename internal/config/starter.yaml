@@ -1,0 +1,52 @@
+# Tollgate configuration.
+# Every field is described in docs/configuration.md.
+version: 1
+
+server:
+  # The address of the data plane. Clients send requests to this address.
+  listen: ":8080"
+  # The largest request body that Tollgate accepts.
+  max_body_bytes: 16MiB
+  # After SIGTERM, the longest time that open requests can continue.
+  drain_timeout: 10m
+
+providers:
+  anthropic:
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    # Tollgate reads the key from this environment variable.
+    # Do not put a key in this file.
+    api_key: env:ANTHROPIC_API_KEY
+  # To use OpenAI, remove the "#" from these lines, and add an openai route.
+  # openai:
+  #   kind: openai
+  #   base_url: https://api.openai.com
+  #   api_key: env:OPENAI_API_KEY
+
+# One route for each model name that clients send.
+# Make sure that the model names agree with the models of your client.
+routes:
+  - model: claude-opus-5-5
+    api: anthropic
+    targets:
+      - provider: anthropic
+  - model: claude-sonnet-5-5
+    api: anthropic
+    targets:
+      - provider: anthropic
+    # These timeouts are the defaults. Each route can change them.
+    timeouts:
+      connect: 5s
+      first_token: 30s
+      idle: 60s
+      total: 15m
+  - model: claude-haiku-5-5
+    api: anthropic
+    targets:
+      - provider: anthropic
+
+tenants:
+  - id: personal
+    # Run "tollgate keys create -id laptop" and paste its lines here.
+    keys: []
+    models: [claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5]

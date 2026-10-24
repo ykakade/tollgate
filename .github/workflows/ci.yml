@@ -40,6 +40,8 @@ jobs:
         run: go tool cover -func=coverage.out | tail -n 1 >> "$GITHUB_STEP_SUMMARY"
       - name: SDK tests
         run: make test-integration RACE=-race
+      - name: Fuzz tests
+        run: make fuzz FUZZTIME=30s
 
   lint:
     name: Lint

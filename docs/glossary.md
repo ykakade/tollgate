@@ -8,6 +8,7 @@ All Tollgate documents use these words with these meanings only. If a document n
 
 | Word | Meaning |
 | --- | --- |
+| access log | The JSON line that Tollgate writes for each request. It has metadata only, never bodies or keys. |
 | adapter | The code that sends requests to one kind of provider, for example Anthropic or Vertex AI. |
 | admin port | The second listener of Tollgate. It serves metrics, the admin API, and the dashboard. By default, it listens on `127.0.0.1:9090`. |
 | ADR | Architecture decision record. One file in `docs/adr/` that records one design decision. |
@@ -15,19 +16,24 @@ All Tollgate documents use these words with these meanings only. If a document n
 | cache read tokens | Input tokens that the provider reads from its prompt cache. They cost less than other input tokens. |
 | cache write tokens | Input tokens that the provider writes to its prompt cache. |
 | circuit breaker | A switch for each provider, model, and region. When too many requests fail, the breaker opens, and Tollgate sends no requests to that target for a period. |
+| connect timeout | The longest time that Tollgate waits for a connection to a provider. |
 | data plane | The listener that receives client requests. By default, it listens on `:8080`. |
 | drain | The shutdown steps: Tollgate refuses new requests and lets open streams finish. |
+| error event | An event that Tollgate adds to a stream when the provider fails after the first byte. Then Tollgate closes the stream. |
 | exact cache | A cache that returns a stored response only for a request with the same bytes and the same tenant. |
 | fake provider | The test server in `cmd/fakeprovider`. It speaks the Anthropic and OpenAI wire formats. |
 | fallback | To send a request to the next target after a failure. |
 | first byte | The first byte of the response that Tollgate sends to the client. After the first byte, Tollgate does not fall back. |
 | first-token timeout | The longest time that Tollgate waits for the first part of a response from a provider. |
+| golden file | A file in `testdata/` that holds the expected bytes of a response. Tests compare the output of Tollgate with it. |
 | hard budget | A budget that stops requests when the spend reaches the limit. |
+| idle timeout | The longest time between two parts of a response body. It is also the longest time to write one part to the client. |
 | micro-USD | One millionth of a US dollar. Tollgate stores all amounts in micro-USD. |
 | preflight | The step that reads the model and the stream setting of a request and estimates its tokens and cost. |
 | provider | A service that runs LLMs, for example Anthropic, OpenAI, Vertex AI, or Ollama. |
 | rate limit | The maximum number of requests or tokens for a tenant in one minute. |
 | relay | The step that sends the provider response to the client and reads a copy of it. |
+| request ID | The ID that Tollgate gives to each request. It is in the `x-request-id` header and in the access log. |
 | reservation | An estimated cost that Tollgate adds to a budget before it sends a request. |
 | retry budget | The maximum ratio of retries to requests. |
 | route | The configuration for one model name that clients send. It gives the API format and the list of targets. |
@@ -39,6 +45,7 @@ All Tollgate documents use these words with these meanings only. If a document n
 | sticky routing | To send all requests of one session to the same target. |
 | target | One provider and one model in the list of a route. |
 | tenant | A user or a team that has its own keys, limits, and budgets. |
+| total timeout | The longest time for one full upstream request. |
 | usage event | The record of one request: tokens, cost, timing, and status. |
 | virtual key | A key that Tollgate gives to a client. It starts with `tg_`. It is not a provider key. |
 | window | The period of a budget, for example a month or a session. |

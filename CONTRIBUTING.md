@@ -41,6 +41,8 @@ If a check fails, run `make help` to see the target for that check, and run it a
 | `make vuln` | Scans for known vulnerabilities with govulncheck. |
 | `make links` | Checks the links in the Markdown files. |
 | `make golden` | Writes the golden files of the fake provider again. |
+| `make fuzz` | Runs each fuzz target for 30 s. Set `FUZZTIME` to change the time. |
+| `make record` | Records provider responses for the golden test. See [testdata/streams](testdata/streams/README.md). |
 | `make check` | Runs all local checks except `vuln` and `links`. |
 
 ## Commits

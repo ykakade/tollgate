@@ -6,6 +6,10 @@ SDK_DIR := test/sdk
 
 GOVULNCHECK_VERSION ?= v1.9.0
 
+# FUZZTIME is the run time of each fuzz target in "make fuzz".
+FUZZTIME ?= 30s
+FUZZ_TARGETS := internal/sse:FuzzSSEParser internal/preflight:FuzzPreflightDecode internal/config:FuzzConfigLoad
+
 # The race detector needs cgo and a C compiler. If the system has no C
 # compiler, the tests run without the race detector and make shows a warning.
 # CI always has a C compiler. Set RACE= to turn the race detector off.
@@ -34,8 +38,20 @@ test-integration: ## Run the SDK tests against the fake provider.
 	CGO_ENABLED=$(if $(RACE),1,0) $(GO) -C $(SDK_DIR) test $(RACE) ./...
 
 .PHONY: golden
-golden: ## Write the golden files again from the current output.
+golden: ## Write the golden files of the fake provider again from the current output.
 	$(GO) test ./internal/fakeprovider -update
+
+.PHONY: fuzz
+fuzz: ## Run each fuzz target for FUZZTIME (default 30s).
+	@for t in $(FUZZ_TARGETS); do \
+		pkg=$${t%%:*}; name=$${t##*:}; \
+		echo "$(GO) test ./$$pkg -run '^$$' -fuzz '^$$name$$' -fuzztime $(FUZZTIME)"; \
+		$(GO) test ./$$pkg -run '^$$' -fuzz "^$$name\$$" -fuzztime $(FUZZTIME) || exit 1; \
+	done
+
+.PHONY: record
+record: ## Record provider streams into testdata/streams. Needs API keys, see testdata/streams/README.md.
+	$(GO) test -tags record -run '^TestRecord$$' -count=1 -v ./internal/server
 
 .PHONY: lint
 lint: ## Run golangci-lint on all modules.

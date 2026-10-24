@@ -1,0 +1,18 @@
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_Example","type":"function","function":{"name":"get_weather","arguments":""}}],"refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\""}}]},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"location"}}]},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\":\""}}]},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"Paris"}}]},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"}"}}]},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"tool_calls"}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[],"usage":{"prompt_tokens":2150,"completion_tokens":118,"total_tokens":2268,"prompt_tokens_details":{"cached_tokens":1920,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":64,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}}
+
+data: [DONE]
+

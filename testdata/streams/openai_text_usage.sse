@@ -1,0 +1,16 @@
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"content":"Hello"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"content":"!"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"content":" How can I"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{"content":" help?"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":null}
+
+data: {"id":"chatcmpl-Example1","object":"chat.completion.chunk","created":1761300000,"model":"gpt-example","system_fingerprint":"fp_example","choices":[],"usage":{"prompt_tokens":19,"completion_tokens":10,"total_tokens":29,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}}
+
+data: [DONE]
+

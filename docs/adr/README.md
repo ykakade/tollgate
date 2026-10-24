@@ -21,6 +21,8 @@ Each record has a number, a status, and a date. To change a decision, write a ne
 | [0013](0013-graceful-drain.md) | Drain open streams before shutdown | Accepted |
 | [0014](0014-json-v2.md) | Use encoding/json/v2 | Accepted |
 | [0015](0015-sdk-test-module.md) | Keep SDK tests in a separate Go module | Accepted |
+| [0016](0016-timeouts.md) | Define the four timeouts of an upstream request | Accepted |
+| [0017](0017-body-edits.md) | Edit request bodies in place, without a new encode | Accepted |
 
 ## Template
 

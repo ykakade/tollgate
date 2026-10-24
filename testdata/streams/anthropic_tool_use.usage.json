@@ -1,0 +1,7 @@
+{
+  "input_tokens": 472,
+  "output_tokens": 89,
+  "cache_read_tokens": 2048,
+  "cache_write_tokens": 1024,
+  "reasoning_tokens": 0
+}

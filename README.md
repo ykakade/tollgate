@@ -7,12 +7,16 @@ One Go binary that controls cost, rate limits, and failover for the Anthropic an
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 > [!NOTE]
-> Status: alpha. Tollgate does not send requests to providers yet. The configuration format can change before v1.0.
+> Status: alpha. Tollgate sends requests to one provider for each model. It has no rate limits, budgets or fallback yet. The configuration format can change before v1.0.
 
-## What is in this repository
+## What Tollgate does
 
-- `tollgate`: the gateway binary. At this time, it has only the `version` command.
-- `fakeprovider`: a test server. It speaks the wire formats of the Anthropic Messages API and the OpenAI Chat Completions API. It always returns the same reply, with streaming and without streaming.
+- **Does not change requests.** Anthropic `/v1/messages` and OpenAI `/v1/chat/completions` requests go through in their native format. Streams go to the client byte for byte.
+- **Uses its own keys.** Clients send a Tollgate key. Tollgate stores only the hash of the key, and sends the provider key from the environment.
+- **Records the tokens of each request.** Tollgate reads the usage from each response, with cache tokens, and writes one JSON log line for each request.
+- **Stops slow providers.** Each route has a connect, first-token, idle and total timeout.
+- **Does not cut streams at shutdown.** On `SIGTERM`, Tollgate refuses new requests and lets open streams finish.
+- **Stops upstream requests that nobody reads.** If the client disconnects, Tollgate cancels the request to the provider.
 
 ## Build from source
 
@@ -44,7 +48,9 @@ Result: Tollgate shows its version, its commit, and the Go version.
 
 If the build fails, make sure that your Go version is the same as or later than the version in `go.mod`.
 
-## Use the fake provider
+## Quick start with the fake provider
+
+This procedure uses the fake provider, so you need no provider key.
 
 1. Start the fake provider:
 
@@ -52,22 +58,57 @@ If the build fails, make sure that your Go version is the same as or later than 
    ./bin/fakeprovider -listen 127.0.0.1:8090
    ```
 
-2. In a different terminal, send a streaming request:
+2. In a different terminal, make a configuration file:
 
    ```sh
-   curl http://127.0.0.1:8090/v1/messages \
-     -H "content-type: application/json" \
-     -d '{"model":"claude-test","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"Say hello."}]}'
+   ./bin/tollgate init > tollgate.yaml
    ```
 
-Result: The fake provider sends an Anthropic event stream with the text `Hello from the Tollgate fake provider.`
+3. In `tollgate.yaml`, set the `base_url` of the `anthropic` provider to `http://127.0.0.1:8090`.
+4. Make a key:
 
-The fake provider also accepts OpenAI requests on `/v1/chat/completions`.
+   ```sh
+   ./bin/tollgate keys create -id laptop
+   ```
 
-If `fakeprovider` cannot start, make sure that no other program uses port 8090. You can also use a different `-listen` address.
+5. Add the two lines that the command shows to the `keys` list of the tenant `personal` in `tollgate.yaml`. Remove `[]` after `keys:`.
+6. Start Tollgate. The fake provider accepts any provider key:
 
-## Design
+   ```sh
+   ANTHROPIC_API_KEY=fake ./bin/tollgate serve -config tollgate.yaml
+   ```
 
+7. In a third terminal, send a streaming request with your Tollgate key:
+
+   ```sh
+   curl http://127.0.0.1:8080/v1/messages \
+     -H "x-api-key: <your Tollgate key>" \
+     -H "anthropic-version: 2023-06-01" \
+     -H "content-type: application/json" \
+     -d '{"model":"claude-sonnet-5-5","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"Say hello."}]}'
+   ```
+
+Result: Tollgate sends the event stream of the fake provider, with the text `Hello from the Tollgate fake provider.` Tollgate writes a log line with the tokens of the request.
+
+If Tollgate does not start, run `./bin/tollgate config validate -config tollgate.yaml`. It shows each error with its line number.
+
+To use Tollgate with Claude Code and the Anthropic API, see [examples/claude-code](examples/claude-code/).
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `tollgate serve` | Starts the gateway. |
+| `tollgate init` | Shows a starter configuration file. |
+| `tollgate keys create -id <name>` | Makes a key and shows its hash for the configuration file. |
+| `tollgate config validate` | Checks the configuration file and shows all errors. |
+| `tollgate version` | Shows the version. |
+
+## Documentation
+
+- [Configuration](docs/configuration.md): each field of the configuration file
+- [Operations](docs/operations.md): start, stop, health endpoints and logs
+- [M1 validation](docs/m1-validation.md): acceptance checks and validation limits
 - [Decision records](docs/adr/): the design decisions and the reasons for them
 - [Glossary](docs/glossary.md): the technical words that the documents use
 
