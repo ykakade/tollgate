@@ -17,14 +17,14 @@ function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] 
   return [ref, width];
 }
 
-// niceMax returns a round axis maximum at or above v, and the step of its
-// ticks.
-export function niceScale(v: number, ticks = 4): { max: number; step: number } {
-  if (!(v > 0)) return { max: 1, step: 0.25 };
+// niceScale returns a round axis maximum at or above v, and the step of its
+// ticks. The step is at least minStep, so counts get whole-number ticks.
+export function niceScale(v: number, ticks = 4, minStep = 0): { max: number; step: number } {
+  if (!(v > 0)) return { max: Math.max(1, minStep), step: Math.max(0.25, minStep) };
   const raw = v / ticks;
   const mag = 10 ** Math.floor(Math.log10(raw));
   const norm = raw / mag;
-  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag;
+  const step = Math.max((norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag, minStep);
   return { max: step * Math.ceil(v / step), step };
 }
 
@@ -99,6 +99,7 @@ export function ColumnChart({
   format,
   height = 200,
   axisLabelEvery,
+  minStep,
   ticks: tickMaker,
 }: {
   columns: Column[];
@@ -106,6 +107,8 @@ export function ColumnChart({
   format: (v: number) => string;
   height?: number;
   axisLabelEvery?: number;
+  // minStep is the smallest step between two axis ticks.
+  minStep?: number;
   // ticks, if set, makes the formatter of the axis ticks from the step.
   ticks?: (step: number) => (v: number) => string;
 }) {
@@ -116,7 +119,7 @@ export function ColumnChart({
   const plotW = Math.max(width - left - 4, 50);
   const plotH = height - bottom - 8;
   const totals = columns.map((c) => c.values.reduce((a, b) => a + b, 0));
-  const { max, step } = niceScale(Math.max(...totals, 0));
+  const { max, step } = niceScale(Math.max(...totals, 0), 4, minStep);
   const band = plotW / Math.max(columns.length, 1);
   const barW = Math.max(Math.min(24, band * 0.7), 2);
   const y = (v: number) => 8 + plotH - (v / max) * plotH;

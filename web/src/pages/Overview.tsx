@@ -50,7 +50,7 @@ export function Overview({ range, tenant, onUnauthorized }: { range: Range; tena
     <div className={loading ? 'loading' : undefined}>
       {error && <ErrorNotice error={error} />}
       <div className="tiles">
-        <Tile hero label="Spend" value={usd(t?.cost_micro_usd ?? 0)} note={`${count(t?.requests ?? 0)} requests`} />
+        <Tile hero label="Spend" value={usd(t?.cost_micro_usd ?? 0)} note={`${count(t?.requests ?? 0)} ${t?.requests === 1 ? 'request' : 'requests'}`} />
         <Tile
           label="Failed requests"
           value={t && t.requests > 0 ? percent(t.errors / t.requests, 1) : '0%'}
@@ -93,7 +93,7 @@ export function Overview({ range, tenant, onUnauthorized }: { range: Range; tena
           title={`Requests per ${per}`}
           sub="Refused requests got a 4xx status from Tollgate or the provider. Failed requests got a 5xx status."
           legend={<Legend series={requestSeries} />}
-          chart={<ColumnChart columns={reqCols} series={requestSeries} format={(v) => count(Math.round(v))} />}
+          chart={<ColumnChart columns={reqCols} series={requestSeries} format={(v) => count(Math.round(v))} minStep={1} />}
           table={
             <table>
               <thead>

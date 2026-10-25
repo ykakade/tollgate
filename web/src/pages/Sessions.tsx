@@ -145,7 +145,7 @@ export function SessionDetail({ tenant, id, onUnauthorized }: { tenant: string; 
       </p>
       {error && <ErrorNotice error={error} />}
       <div className="tiles">
-        <Tile hero label="Spend" value={usd(s.cost_micro_usd)} note={`${count(s.requests)} requests`} />
+        <Tile hero label="Spend" value={usd(s.cost_micro_usd)} note={`${count(s.requests)} ${s.requests === 1 ? 'request' : 'requests'}`} />
         <Tile
           label="Budget left"
           value={b ? usd(b.remaining_micro_usd) : 'No budget'}
