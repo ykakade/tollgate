@@ -13,6 +13,7 @@ import (
 	"github.com/ykakade/tollgate/internal/preflight"
 	"github.com/ykakade/tollgate/internal/pricing"
 	"github.com/ykakade/tollgate/internal/provider"
+	"github.com/ykakade/tollgate/internal/telemetry"
 	"github.com/ykakade/tollgate/internal/usage"
 )
 
@@ -112,6 +113,11 @@ func (s *Server) admit(ctx context.Context, x *exchange, ep endpoint, list *targ
 			msg = fmt.Sprintf("The tenant %q sent its limit of %d requests per minute. Wait %d seconds. Then send the request again.", tenant, r.Limit, secs)
 		}
 		x.denied = "rate_limit"
+		if r.Key == budget.TokensKey(tenant) {
+			s.metrics.LimitRejection(telemetry.LimitTokens)
+		} else {
+			s.metrics.LimitRejection(telemetry.LimitRequests)
+		}
 		x.fail(http.StatusTooManyRequests, msg, secs)
 	default:
 		b := a.used[d.DeniedBudget]
@@ -123,6 +129,7 @@ func (s *Server) admit(ctx context.Context, x *exchange, ep endpoint, list *targ
 			msg = fmt.Sprintf("The tenant %q does not have sufficient budget for this request. The month budget is %s USD, and the spend is %s USD. Wait for the next month, or increase the limit_usd of the month budget.", tenant, b.LimitUSD, spend)
 		}
 		x.denied = "budget_" + b.Window
+		s.metrics.LimitRejection(telemetry.LimitBudget)
 		x.fail(http.StatusPaymentRequired, msg, 0)
 	}
 	return nil, false

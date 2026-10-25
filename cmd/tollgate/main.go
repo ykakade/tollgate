@@ -14,18 +14,26 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/ykakade/tollgate/internal/admin"
 	"github.com/ykakade/tollgate/internal/auth"
 	"github.com/ykakade/tollgate/internal/budget"
 	"github.com/ykakade/tollgate/internal/buildinfo"
 	"github.com/ykakade/tollgate/internal/config"
 	"github.com/ykakade/tollgate/internal/limiter"
 	"github.com/ykakade/tollgate/internal/server"
+	"github.com/ykakade/tollgate/internal/telemetry"
 	"github.com/ykakade/tollgate/internal/usage"
 )
 
 // usageCloseTimeout is the longest time to write the queued usage events
 // at shutdown.
 const usageCloseTimeout = 10 * time.Second
+
+// traceCloseTimeout is the longest time to send the last spans at
+// shutdown.
+const traceCloseTimeout = 5 * time.Second
 
 const helpText = `Tollgate is a lightweight AI gateway for coding agents.
 
@@ -158,7 +166,14 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Tollgate cannot start the providers: %v\n", err)
 		return exitError
 	}
-	store, closeStore, err := newStore(ctx, cfg.Store, logger)
+	metrics := telemetry.NewMetrics()
+	tracer, closeTracer, err := newTracer(ctx, cfg.Telemetry, logger)
+	if err != nil {
+		fmt.Fprintf(stderr, "Tollgate cannot start the tracer: %v\n", err)
+		return exitError
+	}
+	defer closeTracer()
+	store, closeStore, err := newStore(ctx, cfg.Store, metrics, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "Tollgate cannot start the limit store: %v\n", err)
 		return exitError
@@ -169,9 +184,10 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Tollgate cannot open the usage file %s: %v. Make sure that Tollgate can write to the directory.\n", cfg.Usage.Path, err)
 		return exitError
 	}
-	opts := server.Options{Config: cfg, Adapters: adapters, Logger: logger, Store: store}
+	opts := server.Options{Config: cfg, Adapters: adapters, Logger: logger, Store: store, Metrics: metrics, Tracer: tracer}
 	if queue != nil {
 		opts.Usage = queue
+		metrics.WatchUsageDropped(cfg.Usage.Sink, queue.Dropped)
 		defer closeUsage(ctx, queue, logger)
 	}
 	srv, err := server.New(opts)
@@ -190,6 +206,27 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Tollgate cannot listen on %s: %v. Make sure that no other program uses the address.\n", cfg.Server.Listen, err)
 		return exitError
 	}
+	adminLn, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.Server.AdminListen)
+	if err != nil {
+		_ = ln.Close()
+		fmt.Fprintf(stderr, "Tollgate cannot listen on the admin address %s: %v. Make sure that no other program uses the address, or change server.admin_listen.\n", cfg.Server.AdminListen, err)
+		return exitError
+	}
+	// The admin listener stays open during the drain, so /metrics shows
+	// the open streams. It stops after the data plane.
+	adminCtx, stopAdmin := context.WithCancel(context.WithoutCancel(ctx))
+	adminDone := make(chan struct{})
+	go func() {
+		defer close(adminDone)
+		h := admin.Handler(admin.Options{Metrics: metrics.Handler(), Token: cfg.Server.AdminToken.Value(), PProf: cfg.Server.PProf})
+		if err := admin.Serve(adminCtx, adminLn, h, logger); err != nil {
+			logger.ErrorContext(ctx, "admin port failed", "error", err.Error())
+		}
+	}()
+	defer func() {
+		stopAdmin()
+		<-adminDone
+	}()
 
 	// The first SIGTERM or SIGINT starts the drain. A second signal cancels
 	// the open requests at once.
@@ -224,9 +261,30 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 	return exitOK
 }
 
+// newTracer returns the tracer of the configuration, and a function that
+// sends the last spans. With no OTLP endpoint, the tracer is nil and the
+// server makes no spans.
+func newTracer(ctx context.Context, cfg config.Telemetry, logger *slog.Logger) (trace.Tracer, func(), error) {
+	if cfg.OTLPEndpoint == "" {
+		return nil, func() {}, nil
+	}
+	tp, err := telemetry.NewTracerProvider(ctx, cfg.OTLPEndpoint, buildinfo.Read().Version, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	logger.InfoContext(ctx, "tracing started", "otlp_endpoint", cfg.OTLPEndpoint)
+	return tp.Tracer(telemetry.TracerName), func() {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), traceCloseTimeout)
+		defer cancel()
+		if err := tp.Shutdown(sctx); err != nil {
+			logger.WarnContext(ctx, "spans not sent at shutdown", "error", err.Error())
+		}
+	}, nil
+}
+
 // newStore makes the limit store of the configuration. A Redis store is
 // behind a Failover store, so that rate limits fail open (ADR 0006).
-func newStore(ctx context.Context, cfg config.Store, logger *slog.Logger) (limiter.Store, func(), error) {
+func newStore(ctx context.Context, cfg config.Store, metrics *telemetry.Metrics, logger *slog.Logger) (limiter.Store, func(), error) {
 	if cfg.Kind != config.StoreRedis {
 		return limiter.NewMemory(), func() {}, nil
 	}
@@ -238,6 +296,7 @@ func newStore(ctx context.Context, cfg config.Store, logger *slog.Logger) (limit
 		Main:  r,
 		Local: limiter.NewMemory(),
 		OnError: func(op string, err error) {
+			metrics.StoreError(config.StoreRedis, op)
 			logger.WarnContext(ctx, "limit store failed", "op", op, "error", err.Error())
 		},
 	}

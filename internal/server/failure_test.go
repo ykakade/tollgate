@@ -31,6 +31,13 @@ import (
 // which targets Tollgate tried. All requests wait for settlement.
 func failureEnv(t *testing.T, api, kind, scenario, extra string, now func() time.Time) (*env, *fakeprovider.Server, *fakeprovider.Server) {
 	t.Helper()
+	return failureEnvWith(t, api, kind, scenario, extra, now, nil)
+}
+
+// failureEnvWith is failureEnv with a function that can change the server
+// options.
+func failureEnvWith(t *testing.T, api, kind, scenario, extra string, now func() time.Time, edit func(*Options)) (*env, *fakeprovider.Server, *fakeprovider.Server) {
+	t.Helper()
 	a := fakeprovider.New(fakeprovider.Config{Scenario: scenario})
 	b := fakeprovider.New(fakeprovider.Config{})
 	first := httptest.NewServer(a.Handler())
@@ -73,7 +80,11 @@ tenants:
 		t.Fatal(err)
 	}
 	logs := &syncBuffer{}
-	srv, err := New(Options{Config: cfg, Adapters: adapters, Logger: slog.New(slog.NewJSONHandler(logs, nil)), Now: now})
+	opts := Options{Config: cfg, Adapters: adapters, Logger: slog.New(slog.NewJSONHandler(logs, nil)), Now: now}
+	if edit != nil {
+		edit(&opts)
+	}
+	srv, err := New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}

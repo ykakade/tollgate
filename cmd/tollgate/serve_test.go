@@ -49,6 +49,7 @@ func TestServeSIGTERM(t *testing.T) {
 	cfg := fmt.Sprintf(`version: 1
 server:
   listen: "127.0.0.1:0"
+  admin_listen: "127.0.0.1:0"
   drain_timeout: 30s
 providers:
   anthropic: {kind: anthropic, base_url: %s, api_key: env:TEST_PROVIDER_KEY}
@@ -125,6 +126,23 @@ tenants:
 		t.Errorf("new request after SIGTERM: status %d, want 503", r.StatusCode)
 	}
 
+	// The admin listener stays open during the drain, and its metrics
+	// show the open stream.
+	adminAddr := logs.addr("admin port started")
+	if adminAddr == "" {
+		t.Fatalf("no admin port address in the logs:\n%s", logs)
+	}
+	metricsReq, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+adminAddr+"/metrics", nil)
+	mr, err := client.Do(metricsReq)
+	if err != nil {
+		t.Fatalf("get /metrics during the drain: %v", err)
+	}
+	metricsBody, _ := io.ReadAll(mr.Body)
+	mr.Body.Close()
+	if mr.StatusCode != http.StatusOK || !strings.Contains(string(metricsBody), "\ntollgate_active_streams 1\n") {
+		t.Errorf("/metrics during the drain: status %d, want 200 with tollgate_active_streams 1:\n%s", mr.StatusCode, metricsBody)
+	}
+
 	close(release)
 	got, err := io.ReadAll(resp.Body)
 	if err != nil || string(got) != rest {
@@ -171,6 +189,23 @@ func (l *lockedLines) read(r io.Reader, addr chan<- string) {
 			addr <- m.Addr
 		}
 	}
+}
+
+// addr returns the address of the first log line with the message msg,
+// or "".
+func (l *lockedLines) addr(msg string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, line := range l.lines {
+		var m struct {
+			Msg  string `json:"msg"`
+			Addr string `json:"addr"`
+		}
+		if json.Unmarshal([]byte(line), &m) == nil && m.Msg == msg {
+			return m.Addr
+		}
+	}
+	return ""
 }
 
 func (l *lockedLines) String() string {

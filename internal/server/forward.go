@@ -10,11 +10,17 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/ykakade/tollgate/internal/config"
 	"github.com/ykakade/tollgate/internal/preflight"
 	"github.com/ykakade/tollgate/internal/provider"
 	"github.com/ykakade/tollgate/internal/relay"
 	"github.com/ykakade/tollgate/internal/router"
+	"github.com/ykakade/tollgate/internal/telemetry"
 )
 
 // Settings of the attempts.
@@ -81,7 +87,9 @@ func (s *Server) try(ctx context.Context, x *exchange, f *flow, i int) (int, boo
 	}
 	x.served, x.provider, x.providerModel, x.attempts = i, t.Provider, t.Model, f.plan.Attempts()
 
-	a := relay.Start(ctx, f.rt.timeouts)
+	actx, span := s.startAttempt(ctx, x, f, t)
+	defer span.End()
+	a := relay.Start(actx, f.rt.timeouts)
 	defer a.Stop()
 	if x.attempts == 1 {
 		x.overhead = time.Since(x.start) - x.readTime
@@ -98,10 +106,12 @@ func (s *Server) try(ctx context.Context, x *exchange, f *flow, i int) (int, boo
 		if cause := a.Err(); cause != nil {
 			err = cause
 		}
+		endAttempt(span, 0, err)
 		return s.failed(ctx, x, f, t, router.Result{Err: err, ClientGone: ctx.Err() != nil})
 	}
 	defer resp.Body.Close()
 	x.upstreamID = upstreamRequestID(resp.Header)
+	span.SetAttributes(semconv.HTTPResponseStatusCode(resp.StatusCode))
 
 	ok2xx := resp.StatusCode >= 200 && resp.StatusCode < 300
 	reported := false
@@ -114,12 +124,17 @@ func (s *Server) try(ctx context.Context, x *exchange, f *flow, i int) (int, boo
 				s.router.CoolDown(t.key, retryAfter(resp.Header, s.now()))
 			}
 			reason := "status " + strconv.Itoa(resp.StatusCode)
-			if next, _, ok := f.plan.Next(action); ok {
+			next, stop, ok := f.plan.Next(action)
+			if ok {
+				endAttempt(span, resp.StatusCode, nil)
 				f.failures = append(f.failures, t.name()+" ("+reason+")")
-				s.logRetry(ctx, x, t, f.list.targets[next], reason)
+				s.logRetry(ctx, x, f, t, f.list.targets[next], reason, statusLabel(resp.StatusCode))
 				// Close the error body without a read. A stalled body must
 				// not delay the next target.
 				return next, true
+			}
+			if stop == router.BudgetExhausted {
+				s.metrics.RetryBudgetExhausted(t.Provider)
 			}
 			// No next attempt: the client gets this response.
 		}
@@ -142,8 +157,16 @@ func (s *Server) try(ctx context.Context, x *exchange, f *flow, i int) (int, boo
 	if meter != nil {
 		meterW = meter
 	}
+	streaming := isStream && ok2xx
+	if streaming {
+		s.metrics.StreamStarted()
+	}
 	n, copyErr := a.Copy(dst, resp.Body, meterW)
+	if streaming {
+		s.metrics.StreamEnded()
+	}
 	x.bytesOut = n
+	endAttempt(span, resp.StatusCode, copyErr)
 	if fb := a.FirstByte(); !fb.IsZero() {
 		x.ttft = fb.Sub(x.start)
 	}
@@ -176,8 +199,56 @@ func (s *Server) try(ctx context.Context, x *exchange, f *flow, i int) (int, boo
 			x.usage = provider.Usage{InputTokens: preflight.EstimateInputTokens(len(body))}
 			x.usageKnown, x.estimated = true, true
 		}
+		if mm, ok := meter.(modelMeter); ok {
+			x.responseModel = mm.Model()
+		}
+		if streaming && !x.estimated && x.usage.OutputTokens > 1 {
+			x.itl = a.LastByte().Sub(a.FirstByte()) / time.Duration(x.usage.OutputTokens-1)
+		}
+		if x.responseModel != "" {
+			span.SetAttributes(telemetry.GenAIResponseModel.String(x.responseModel))
+		}
+		span.SetAttributes(usageAttrs(x.usage, x.estimated)...)
 	}
 	return 0, false
+}
+
+// modelMeter is a meter that knows the model that the response names.
+type modelMeter interface {
+	Model() string
+}
+
+// startAttempt starts the client span of one upstream attempt, with the
+// attributes of the OpenTelemetry GenAI conventions.
+func (s *Server) startAttempt(ctx context.Context, x *exchange, f *flow, t *target) (context.Context, trace.Span) {
+	attrs := []attribute.KeyValue{
+		telemetry.GenAIOperationName.String(telemetry.OperationChat),
+		telemetry.GenAIProviderName.String(telemetry.ProviderName(t.kind)),
+		telemetry.GenAIRequestModel.String(t.Model),
+		telemetry.AttrAttempt.Int(x.attempts),
+		telemetry.AttrTarget.String(t.name()),
+		telemetry.AttrRequestID.String(x.id),
+	}
+	if f.pre.MaxTokens > 0 {
+		attrs = append(attrs, telemetry.GenAIRequestMaxTokens.Int64(f.pre.MaxTokens))
+	}
+	return s.tracer.Start(ctx, telemetry.OperationChat+" "+t.Model,
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attrs...),
+	)
+}
+
+// endAttempt sets the result of an attempt on its span. Status is 0 if no
+// response came.
+func endAttempt(span trace.Span, status int, err error) {
+	switch {
+	case err != nil:
+		span.SetAttributes(semconv.ErrorTypeKey.String(errorType(err)))
+		span.SetStatus(codes.Error, failReason(err))
+	case status >= 400:
+		span.SetAttributes(semconv.ErrorTypeKey.String(strconv.Itoa(status)))
+		span.SetStatus(codes.Error, "status "+strconv.Itoa(status))
+	}
 }
 
 // failed handles an attempt that failed before the downstream response
@@ -194,7 +265,7 @@ func (s *Server) failed(ctx context.Context, x *exchange, f *flow, t *target, re
 	if ok {
 		reason := failReason(res.Err)
 		f.failures = append(f.failures, t.name()+" ("+reason+")")
-		s.logRetry(ctx, x, t, f.list.targets[next], reason)
+		s.logRetry(ctx, x, f, t, f.list.targets[next], reason, failLabel(res.Err))
 		return next, true
 	}
 	s.lastFailed(ctx, x, f, t, res.Err, stop)
@@ -219,6 +290,7 @@ func (s *Server) lastFailed(ctx context.Context, x *exchange, f *flow, t *target
 	case router.MaxAttempts:
 		msg += fmt.Sprintf(" Tollgate stopped after %d attempts (retry.max_attempts).", s.maxAttempts)
 	case router.BudgetExhausted:
+		s.metrics.RetryBudgetExhausted(t.Provider)
 		msg += " Tollgate did not try again, because the retry budget is empty."
 	}
 	x.fail(http.StatusBadGateway, msg+" Send the request again later.", 0)
@@ -267,9 +339,35 @@ func failReason(err error) string {
 	}
 }
 
-// logRetry writes the warning for an attempt that failed before the next
-// attempt.
-func (s *Server) logRetry(ctx context.Context, x *exchange, from, to *target, reason string) {
+// failLabel is the reason of a failed attempt for metric labels.
+func failLabel(err error) string {
+	return strings.ReplaceAll(failReason(err), " ", "_")
+}
+
+// statusLabel is the reason of an attempt with an error status for metric
+// labels.
+func statusLabel(status int) string {
+	switch status {
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	case router.StatusOverloaded:
+		return "overloaded"
+	default:
+		return "server_error"
+	}
+}
+
+// logRetry records an attempt that failed before the next attempt: a
+// warning, the retry and fallback metrics, and an event on the server span.
+// The label is the reason for the metrics.
+func (s *Server) logRetry(ctx context.Context, x *exchange, f *flow, from, to *target, reason, label string) {
+	s.metrics.Retry(f.rt.model, from.Provider, from.name(), to.name(), label)
+	x.span.AddEvent("retry", trace.WithAttributes(
+		telemetry.AttrAttempt.Int(x.attempts),
+		attribute.String("tollgate.from", from.name()),
+		attribute.String("tollgate.to", to.name()),
+		attribute.String("tollgate.reason", label),
+	))
 	s.logger.WarnContext(ctx, "upstream attempt failed, trying again",
 		"request_id", x.id,
 		"attempt", x.attempts,

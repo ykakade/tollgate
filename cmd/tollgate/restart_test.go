@@ -106,6 +106,7 @@ func TestRestartKeepsMonthSpend(t *testing.T) {
 	cfg := fmt.Sprintf(`version: 1
 server:
   listen: "127.0.0.1:0"
+  admin_listen: "127.0.0.1:0"
 pricing:
   file: prices.yaml
 providers:

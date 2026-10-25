@@ -13,6 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/oauth2"
 
 	"github.com/ykakade/tollgate/internal/auth"
@@ -26,6 +29,7 @@ import (
 	"github.com/ykakade/tollgate/internal/provider/vertex"
 	"github.com/ykakade/tollgate/internal/relay"
 	"github.com/ykakade/tollgate/internal/router"
+	"github.com/ykakade/tollgate/internal/telemetry"
 	"github.com/ykakade/tollgate/internal/usage"
 )
 
@@ -60,6 +64,12 @@ type Options struct {
 	Usage Emitter
 	// Now returns the current time. If nil, the server uses time.Now.
 	Now func() time.Time
+	// Metrics receives the metrics of the requests. If nil, the server
+	// uses new metrics that no endpoint shows.
+	Metrics *telemetry.Metrics
+	// Tracer makes the spans of the requests. If nil, the server makes no
+	// spans.
+	Tracer trace.Tracer
 }
 
 // Emitter receives usage events. It must not block. A *usage.Queue is an
@@ -84,6 +94,9 @@ type Server struct {
 	reserveOutput int64
 	router        *router.Router
 	maxAttempts   int
+	metrics       *telemetry.Metrics
+	tracer        trace.Tracer
+	propagator    propagation.TextMapPropagator
 }
 
 type routeKey struct {
@@ -159,6 +172,15 @@ func New(opts Options) (*Server, error) {
 		prices:        cfg.Prices,
 		reserveOutput: cfg.Reservation.OutputTokens,
 		maxAttempts:   cfg.Retry.MaxAttempts,
+		metrics:       opts.Metrics,
+		tracer:        opts.Tracer,
+		propagator:    propagation.TraceContext{},
+	}
+	if s.metrics == nil {
+		s.metrics = telemetry.NewMetrics()
+	}
+	if s.tracer == nil {
+		s.tracer = noop.NewTracerProvider().Tracer(telemetry.TracerName)
 	}
 	if s.logger == nil {
 		s.logger = slog.New(slog.DiscardHandler)
@@ -224,7 +246,31 @@ func New(opts Options) (*Server, error) {
 		}
 		s.tenants[t.ID] = &tenantPolicy{models: models, limits: t.Limits, budgets: t.Budgets}
 	}
+	s.metrics.WatchBreakers(s.breakerStates(cfg))
 	return s, nil
+}
+
+// breakerStates returns a function that gives the state of the breaker of
+// each target in the configuration, for the breaker_state metric.
+func (s *Server) breakerStates(cfg *config.Config) func() []telemetry.BreakerState {
+	seen := make(map[router.Key]bool)
+	var keys []router.Key
+	for _, r := range cfg.Routes {
+		for _, tc := range r.Targets {
+			k := router.Key{Provider: tc.Provider, Model: tc.Model, Region: cfg.Providers[tc.Provider].Region}
+			if !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	return func() []telemetry.BreakerState {
+		out := make([]telemetry.BreakerState, len(keys))
+		for i, k := range keys {
+			out[i] = telemetry.BreakerState{Provider: k.Provider, Model: k.Model, Region: k.Region, State: int(s.router.State(k))}
+		}
+		return out
+	}
 }
 
 // AdapterOptions are the options of NewAdapters.

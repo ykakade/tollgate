@@ -11,6 +11,12 @@ import (
 	"strconv"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/ykakade/tollgate/internal/apierror"
 	"github.com/ykakade/tollgate/internal/auth"
 	"github.com/ykakade/tollgate/internal/budget"
@@ -20,6 +26,7 @@ import (
 	"github.com/ykakade/tollgate/internal/provider/anthropic"
 	"github.com/ykakade/tollgate/internal/provider/openai"
 	"github.com/ykakade/tollgate/internal/relay"
+	"github.com/ykakade/tollgate/internal/telemetry"
 )
 
 // statusClientClosed is the status in the access log when the client
@@ -49,11 +56,19 @@ type exchange struct {
 	id    string
 	start time.Time
 
-	status        int
-	identity      auth.Identity
-	routeModel    string
+	// span is the server span of the request.
+	span       trace.Span
+	status     int
+	identity   auth.Identity
+	routeModel string
+	// route is the model of the route that the request uses, or "" if it
+	// has none. Unlike routeModel, it comes from the configuration, so it
+	// is a bounded metric label.
+	route         string
 	provider      string
 	providerModel string
+	// responseModel is the model that the response names, or "".
+	responseModel string
 	stream        bool
 	attempts      int
 	// served is the index of the target of the last attempt, or -1.
@@ -63,6 +78,8 @@ type exchange struct {
 	usageKnown bool
 	estimated  bool
 	ttft       time.Duration
+	// itl is the mean time between output tokens of a stream, or -1.
+	itl        time.Duration
 	overhead   time.Duration
 	bytesIn    int
 	bytesOut   int64
@@ -85,7 +102,7 @@ type exchange struct {
 
 // begin starts the exchange and sets the x-request-id header.
 func (s *Server) begin(w http.ResponseWriter, r *http.Request, api config.API) *exchange {
-	x := &exchange{w: w, r: r, api: api, id: rand.Text(), start: time.Now(), ttft: -1, served: -1}
+	x := &exchange{w: w, r: r, api: api, id: rand.Text(), start: time.Now(), ttft: -1, itl: -1, served: -1, span: trace.SpanFromContext(r.Context())}
 	w.Header().Set("X-Request-Id", x.id)
 	return x
 }
@@ -153,10 +170,123 @@ func (s *Server) finish(ctx context.Context, x *exchange) {
 	if s.usage != nil && x.identity.TenantID != "" && x.routeModel != "" {
 		s.usage.Emit(x.event())
 	}
+	s.observe(x)
+}
+
+// observe records the metrics of the request and ends its server span.
+func (s *Server) observe(x *exchange) {
+	overhead := time.Duration(-1)
+	if x.attempts > 0 {
+		overhead = x.overhead
+	}
+	s.metrics.ObserveRequest(telemetry.Request{
+		Route:            x.route,
+		Provider:         x.provider,
+		Status:           x.status,
+		Cache:            "bypass",
+		Duration:         time.Since(x.start),
+		TTFT:             x.ttft,
+		ITL:              x.itl,
+		Overhead:         overhead,
+		Usage:            x.usageKnown,
+		InputTokens:      x.usage.InputTokens,
+		OutputTokens:     x.usage.OutputTokens,
+		CacheReadTokens:  x.usage.CacheReadTokens,
+		CacheWriteTokens: x.usage.CacheWriteTokens,
+		CostMicroUSD:     x.cost,
+	})
+
+	sp := x.span
+	if !sp.IsRecording() {
+		return
+	}
+	attrs := []attribute.KeyValue{
+		telemetry.AttrRequestID.String(x.id),
+		telemetry.AttrCache.String("bypass"),
+	}
+	if x.status > 0 {
+		attrs = append(attrs, semconv.HTTPResponseStatusCode(x.status))
+	}
+	if x.identity.TenantID != "" {
+		attrs = append(attrs, telemetry.AttrTenantID.String(x.identity.TenantID))
+	}
+	if x.session != "" {
+		attrs = append(attrs, telemetry.AttrSessionID.String(x.session))
+	}
+	if x.routeModel != "" {
+		attrs = append(attrs, telemetry.GenAIOperationName.String(telemetry.OperationChat), telemetry.GenAIRequestModel.String(x.routeModel))
+	}
+	if x.attempts > 0 {
+		attrs = append(attrs, telemetry.AttrAttempts.Int(x.attempts), telemetry.AttrTarget.String(x.provider+"/"+x.providerModel))
+	}
+	if x.responseModel != "" {
+		attrs = append(attrs, telemetry.GenAIResponseModel.String(x.responseModel))
+	}
+	if x.usageKnown {
+		attrs = append(attrs, usageAttrs(x.usage, x.estimated)...)
+		attrs = append(attrs, telemetry.AttrCostMicroUSD.Int64(x.cost))
+	}
+	if x.denied != "" {
+		attrs = append(attrs, telemetry.AttrDeniedBy.String(x.denied))
+	}
+	sp.SetAttributes(attrs...)
+	switch {
+	case x.status >= 500:
+		sp.SetStatus(codes.Error, http.StatusText(x.status))
+	case x.incomplete:
+		sp.SetStatus(codes.Error, "the response stopped after its first byte")
+	}
+	if x.err != nil && (x.status >= 500 || x.incomplete) {
+		sp.SetAttributes(semconv.ErrorTypeKey.String(errorType(x.err)))
+	}
+	sp.End()
+}
+
+// usageAttrs returns the span attributes of a token usage.
+func usageAttrs(u provider.Usage, estimated bool) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		telemetry.GenAIUsageInputTokens.Int64(u.InputTokens),
+		telemetry.GenAIUsageOutputTokens.Int64(u.OutputTokens),
+		telemetry.AttrCacheReadTokens.Int64(u.CacheReadTokens),
+		telemetry.AttrCacheWriteTokens.Int64(u.CacheWriteTokens),
+		telemetry.AttrUsageEstimated.Bool(estimated),
+	}
+}
+
+// errorType returns the error.type attribute of an error.
+func errorType(err error) string {
+	switch {
+	case errors.Is(err, provider.ErrMalformed):
+		return "malformed_response"
+	case errors.Is(err, relay.ErrClientWrite):
+		return "client_write"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return failLabel(err)
+	}
+}
+
+// traced starts the server span of each request and gives next the
+// request with the span in its context. A traceparent header of the client
+// makes the span a child of the client span. The handler ends the span (see
+// observe).
+func (s *Server) traced(path string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := s.propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		ctx, _ = s.tracer.Start(ctx, r.Method+" "+path,
+			trace.WithSpanKind(trace.SpanKindServer),
+			trace.WithAttributes(
+				semconv.HTTPRequestMethodKey.String(r.Method),
+				semconv.HTTPRoute(path),
+			),
+		)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *Server) proxy(ep endpoint) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.traced(ep.path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		x := s.begin(w, r, ep.api)
 		defer s.finish(ctx, x)
@@ -166,21 +296,53 @@ func (s *Server) proxy(ep endpoint) http.Handler {
 		}
 		defer s.tracker.leave()
 		s.serveProxy(ctx, x, ep)
-	})
+	}))
 }
 
 func (s *Server) serveProxy(ctx context.Context, x *exchange, ep endpoint) {
-	w, r := x.w, x.r
-	key, ok := auth.FromHeader(r.Header)
+	if !s.authenticate(ctx, x) {
+		return
+	}
+	_, span := s.tracer.Start(ctx, "preflight")
+	f, ok := s.preflight(x, ep)
+	span.End()
+	if !ok {
+		return
+	}
+	lctx, span := s.tracer.Start(ctx, "limit check")
+	adm, ok := s.admit(lctx, x, ep, f.list, f.pre, len(f.bodies[0]))
+	span.End()
+	if !ok {
+		return
+	}
+	defer s.settle(ctx, x, adm)
+	defer x.flush()
+	s.forward(ctx, x, f)
+}
+
+// authenticate finds the tenant of the key of the request. If the key is
+// missing or not valid, it sends the error response and returns false.
+func (s *Server) authenticate(ctx context.Context, x *exchange) bool {
+	_, span := s.tracer.Start(ctx, "auth")
+	defer span.End()
+	key, ok := auth.FromHeader(x.r.Header)
 	if !ok {
 		x.fail(http.StatusUnauthorized, "The request has no API key. Send a Tollgate key in the x-api-key header or as a bearer token.", 0)
-		return
+		return false
 	}
 	if x.identity, ok = s.keys.Find(key); !ok {
 		x.fail(http.StatusUnauthorized, "The API key is not valid. Use a Tollgate key that starts with tg_.", 0)
-		return
+		return false
 	}
+	span.SetAttributes(telemetry.AttrTenantID.String(x.identity.TenantID))
+	return true
+}
 
+// preflight reads and decodes the request body, checks the model and the
+// session, and finds the targets. If the request cannot continue, it sends
+// the error response and returns false.
+func (s *Server) preflight(x *exchange, ep endpoint) (*flow, bool) {
+	w, r := x.w, x.r
 	readStart := time.Now()
 	body, err := s.readBody(w, r)
 	x.readTime = time.Since(readStart)
@@ -188,10 +350,10 @@ func (s *Server) serveProxy(ctx context.Context, x *exchange, ep endpoint) {
 		x.err = err
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			x.fail(http.StatusRequestEntityTooLarge, fmt.Sprintf("The request body is larger than the limit of %d bytes. Make the request smaller.", s.maxBody), 0)
-			return
+			return nil, false
 		}
 		x.fail(http.StatusBadRequest, "Tollgate cannot read the request body. Send the request again.", 0)
-		return
+		return nil, false
 	}
 	x.bytesIn = len(body)
 
@@ -199,22 +361,25 @@ func (s *Server) serveProxy(ctx context.Context, x *exchange, ep endpoint) {
 	if err != nil {
 		x.err = err
 		x.fail(http.StatusBadRequest, decodeMessage(err), 0)
-		return
+		return nil, false
 	}
 	x.routeModel, x.stream = pre.Model, pre.Stream
 	if x.session = r.Header.Get("X-Tollgate-Session"); x.session != "" && !budget.ValidSession(x.session) {
 		x.session = ""
 		x.fail(http.StatusBadRequest, "The x-tollgate-session header is not valid. Use 1 to 128 visible ASCII characters, with no spaces.", 0)
-		return
+		return nil, false
 	}
 	if !s.tenants[x.identity.TenantID].models[pre.Model] {
 		x.fail(http.StatusForbidden, fmt.Sprintf("The key cannot use the model %q. Use a model that the configuration of the tenant allows.", pre.Model), 0)
-		return
+		return nil, false
 	}
 	rt := s.routes[routeKey{ep.api, pre.Model}]
+	if rt != nil {
+		x.route = rt.model
+	}
 	if rt == nil {
 		x.fail(http.StatusNotFound, fmt.Sprintf("The model %q has no %s route. Add a route for it to the configuration.", pre.Model, ep.api), 0)
-		return
+		return nil, false
 	}
 	list := &rt.all
 	if ep.path == countTokensPath {
@@ -222,24 +387,17 @@ func (s *Server) serveProxy(ctx context.Context, x *exchange, ep endpoint) {
 	}
 	if len(list.targets) == 0 {
 		x.fail(http.StatusNotFound, fmt.Sprintf("No target of the model %q supports %s. Add a target with a provider of the kind anthropic.", pre.Model, ep.path), 0)
-		return
+		return nil, false
 	}
 	f := &flow{ep: ep, rt: rt, list: list, pre: pre, bodies: make([][]byte, len(list.targets))}
 	// The size of the first body gives the input token estimate of all
 	// targets.
-	first, err := f.body(0)
-	if err != nil {
+	if _, err := f.body(0); err != nil {
 		x.err = err
 		x.fail(http.StatusBadRequest, decodeMessage(err), 0)
-		return
+		return nil, false
 	}
-	adm, ok := s.admit(ctx, x, ep, list, pre, len(first))
-	if !ok {
-		return
-	}
-	defer s.settle(ctx, x, adm)
-	defer x.flush()
-	s.forward(ctx, x, f)
+	return f, true
 }
 
 // responseStartWriter commits the upstream status and headers on the first
@@ -262,6 +420,7 @@ func (w *responseStartWriter) commit() {
 		h.Set("X-Tollgate-Provider", w.x.provider)
 		h.Set("X-Tollgate-Model", w.x.providerModel)
 		h.Set("X-Tollgate-Attempts", strconv.Itoa(w.x.attempts))
+		h.Set("X-Tollgate-Overhead-Ms", strconv.FormatFloat(float64(w.x.overhead)/float64(time.Millisecond), 'f', 3, 64))
 		for k, v := range w.x.limitHeader {
 			h[k] = v
 		}
