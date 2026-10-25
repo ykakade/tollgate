@@ -38,6 +38,7 @@ func testEnv() Env {
 		"redis-url":                     "redis://cache:6379/0",
 	}
 	vars["REDIS_URL"] = "redis://localhost:6379/0"
+	vars["ADMIN_TOKEN"] = "admin-secret"
 	vars["BAD_REDIS_URL"] = "http://user:pw@localhost"
 	return Env{
 		LookupEnv: func(k string) (string, bool) { v, ok := vars[k]; return v, ok },
@@ -133,8 +134,8 @@ func TestParseDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Server{Listen: DefaultListen, MaxBodyBytes: DefaultMaxBodyBytes, DrainTimeout: Duration(DefaultDrainTimeout)}
-	if diff := cmp.Diff(want, cfg.Server); diff != "" {
+	want := Server{Listen: DefaultListen, MaxBodyBytes: DefaultMaxBodyBytes, DrainTimeout: Duration(DefaultDrainTimeout), AdminListen: DefaultAdminListen}
+	if diff := cmp.Diff(want, cfg.Server, cmp.AllowUnexported(Secret{})); diff != "" {
 		t.Errorf("server differs (-want +got):\n%s", diff)
 	}
 }
@@ -627,5 +628,63 @@ func TestOllamaNeedsNoPrice(t *testing.T) {
 	y := strings.Replace(reliabilityConfig, "    models: [claude-sonnet-5-5, local-coder]\n", "    models: [local-coder]\n    budgets: [{window: month, limit_usd: 5}]\n", 1)
 	if _, err := Parse("t.yaml", []byte(y), testEnv()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParseObservability(t *testing.T) {
+	y := `version: 1
+server:
+  admin_listen: "0.0.0.0:9191"
+  admin_token: env:ADMIN_TOKEN
+  pprof: true
+telemetry:
+  otlp_endpoint: http://jaeger:4318
+`
+	cfg, err := Parse("/etc/tollgate/tollgate.yaml", []byte(y), testEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.Server
+	if s.AdminListen != "0.0.0.0:9191" || s.AdminToken.Value() != "admin-secret" || !s.PProf {
+		t.Errorf("server = %+v, token %q", s, s.AdminToken.Value())
+	}
+	if got := cfg.Telemetry.OTLPEndpoint; got != "http://jaeger:4318" {
+		t.Errorf("otlp_endpoint = %q", got)
+	}
+}
+
+func TestParseObservabilityErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name, yaml, want string
+	}{
+		{"admin address", "server:\n  admin_listen: nowhere\n", `The admin_listen address "nowhere" is not valid.`},
+		{"admin same as listen", "server:\n  listen: 127.0.0.1:9000\n  admin_listen: 127.0.0.1:9000\n", "The admin_listen address is the same as the listen address."},
+		{"public admin without token", "server:\n  admin_listen: :9090\n", `The admin port ":9090" is not on a loopback address, but the server has no admin_token.`},
+		{"admin token not set", "server:\n  admin_token: env:NO_TOKEN\n", "The environment variable NO_TOKEN is not set."},
+		{"otlp scheme", "telemetry:\n  otlp_endpoint: grpc://jaeger:4317\n", `The otlp_endpoint "grpc://jaeger:4317" is not valid.`},
+		{"otlp no host", "telemetry:\n  otlp_endpoint: http://\n", `The otlp_endpoint "http://" is not valid.`},
+		{"otlp user", "telemetry:\n  otlp_endpoint: http://u:p@jaeger:4318\n", "The otlp_endpoint"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse("/etc/tollgate/tollgate.yaml", []byte("version: 1\n"+tt.yaml), testEnv())
+			ve, ok := errors.AsType[*ValidationError](err)
+			if !ok {
+				t.Fatalf("err = %v, want a *ValidationError", err)
+			}
+			if len(ve.Errors) != 1 || !strings.HasPrefix(ve.Errors[0].Message, tt.want) {
+				t.Fatalf("errors:\n%s\nwant one error with prefix %q", ve.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestIsLoopback(t *testing.T) {
+	for host, want := range map[string]bool{
+		"localhost": true, "127.0.0.1": true, "::1": true, "127.1.2.3": true,
+		"": false, "0.0.0.0": false, "10.0.0.1": false, "example.com": false,
+	} {
+		if got := IsLoopback(host); got != want {
+			t.Errorf("IsLoopback(%q) = %v, want %v", host, got, want)
+		}
 	}
 }

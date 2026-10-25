@@ -9,6 +9,13 @@ server:
   max_body_bytes: 16MiB
   # After SIGTERM, the longest time that open requests can continue.
   drain_timeout: 10m
+  # The admin port serves /metrics for Prometheus. On an address that is
+  # not 127.0.0.1, also set admin_token, for example env:TOLLGATE_ADMIN_TOKEN.
+  admin_listen: "127.0.0.1:9090"
+
+# To send traces, set the URL of an OTLP/HTTP receiver, for example Jaeger.
+# telemetry:
+#   otlp_endpoint: http://localhost:4318
 
 # The store of the rate limit and budget counters. Use memory for one
 # Tollgate copy. To share the limits between copies, use redis:

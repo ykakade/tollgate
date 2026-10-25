@@ -47,6 +47,7 @@ func (v *validator) validate(c *Config) {
 	v.validateTenants(c.Tenants, routeModels)
 	v.validatePrices(c)
 	v.validateRetry(c.Retry, c.Breaker)
+	v.validateTelemetry(&c.Telemetry)
 }
 
 func (v *validator) validateRetry(r Retry, b Breaker) {
@@ -158,6 +159,38 @@ func (v *validator) validateServer(s *Server) {
 	}
 	if s.MaxBodyBytes > maxBodyBytesLimit {
 		v.add(v.line("server", "max_body_bytes"), "The value of max_body_bytes is too large. Use 1GiB or less.")
+	}
+	host, _, err := net.SplitHostPort(s.AdminListen)
+	if err != nil {
+		v.add(v.line("server", "admin_listen"), "The admin_listen address %q is not valid. Use host:port, for example \"127.0.0.1:9090\".", s.AdminListen)
+		return
+	}
+	if _, port, _ := net.SplitHostPort(s.AdminListen); s.AdminListen == s.Listen && port != "0" {
+		v.add(v.line("server", "admin_listen"), "The admin_listen address is the same as the listen address. Use a different port.")
+	}
+	v.resolveSecret(&s.AdminToken, "The admin_token of the server", "the bearer token of the admin port")
+	if !s.AdminToken.IsSet() && !IsLoopback(host) {
+		v.add(v.line("server", "admin_listen"), "The admin port %q is not on a loopback address, but the server has no admin_token. Add admin_token, for example env:TOLLGATE_ADMIN_TOKEN, or use 127.0.0.1.", s.AdminListen)
+	}
+}
+
+// IsLoopback reports whether host is "localhost" or a loopback IP address.
+// An empty host means all addresses, so it is not a loopback host.
+func IsLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func (v *validator) validateTelemetry(t *Telemetry) {
+	if t.OTLPEndpoint == "" {
+		return
+	}
+	u, err := url.Parse(t.OTLPEndpoint)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		v.add(v.line("telemetry", "otlp_endpoint"), "The otlp_endpoint %q is not valid. Use the URL of an OTLP/HTTP receiver, for example http://localhost:4318.", t.OTLPEndpoint)
 	}
 }
 

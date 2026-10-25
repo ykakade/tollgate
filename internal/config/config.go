@@ -60,6 +60,7 @@ func KindAPI(kind string) API {
 // Defaults.
 const (
 	DefaultListen       = ":8080"
+	DefaultAdminListen  = "127.0.0.1:9090"
 	DefaultMaxBodyBytes = 16 << 20
 	DefaultDrainTimeout = 10 * time.Minute
 
@@ -142,6 +143,7 @@ type Config struct {
 	Tenants     []Tenant            `yaml:"tenants"`
 	Retry       Retry               `yaml:"retry"`
 	Breaker     Breaker             `yaml:"breaker"`
+	Telemetry   Telemetry           `yaml:"telemetry"`
 
 	// Prices is the price table: the file in Pricing.File, or the table
 	// in the binary.
@@ -180,11 +182,26 @@ type Reservation struct {
 	OutputTokens int64 `yaml:"output_tokens"`
 }
 
-// Server holds the settings of the data plane listener.
+// Server holds the settings of the data plane and admin listeners.
 type Server struct {
 	Listen       string   `yaml:"listen"`
 	MaxBodyBytes Size     `yaml:"max_body_bytes"`
 	DrainTimeout Duration `yaml:"drain_timeout"`
+	// AdminListen is the address of the admin listener, which serves
+	// /metrics and, with PProf, the profiles.
+	AdminListen string `yaml:"admin_listen"`
+	// AdminToken is the bearer token of the admin listener. It is
+	// required when AdminListen is not a loopback address.
+	AdminToken Secret `yaml:"admin_token"`
+	// PProf turns on the net/http/pprof handlers on the admin listener.
+	PProf bool `yaml:"pprof"`
+}
+
+// Telemetry holds the settings of the traces.
+type Telemetry struct {
+	// OTLPEndpoint is the URL of an OTLP/HTTP trace receiver, for example
+	// http://localhost:4318. Empty turns tracing off.
+	OTLPEndpoint string `yaml:"otlp_endpoint"`
 }
 
 // Provider is one upstream service.
@@ -355,6 +372,9 @@ func Parse(name string, data []byte, env Env) (*Config, error) {
 func (c *Config) applyDefaults(v *validator) {
 	if c.Server.Listen == "" {
 		c.Server.Listen = DefaultListen
+	}
+	if c.Server.AdminListen == "" {
+		c.Server.AdminListen = DefaultAdminListen
 	}
 	if c.Server.MaxBodyBytes == 0 {
 		c.Server.MaxBodyBytes = DefaultMaxBodyBytes
