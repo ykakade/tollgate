@@ -93,6 +93,24 @@ jobs:
             test/sdk/go.sum
       - run: make vuln
 
+  demo:
+    name: Demo stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start the demo stack
+        run: make demo-up
+      - name: Check for live data
+        run: make demo-check
+      - name: Show the logs
+        if: failure()
+        run: docker compose -f deploy/compose/compose.yaml logs --no-color --tail=100
+      - name: Stop the demo stack
+        if: always()
+        run: make demo-down
+
   links:
     name: Link check
     runs-on: ubuntu-latest

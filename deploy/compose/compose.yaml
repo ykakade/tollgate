@@ -1,0 +1,77 @@
+# The Tollgate demo stack: Tollgate, three fake providers, a load generator,
+# Prometheus, Grafana and Jaeger. Start it with "make demo".
+# See docs/observability.md. The ports bind to 127.0.0.1 only.
+name: tollgate-demo
+
+x-tollgate-image: &tollgate-image
+  image: tollgate-demo:local
+  build:
+    context: ../..
+    dockerfile: deploy/compose/Dockerfile
+
+services:
+  fake-primary:
+    <<: *tollgate-image
+    entrypoint: ["fakeprovider"]
+    command: ["-listen", "0.0.0.0:8090", "-first-token-delay", "400ms", "-token-interval", "30ms"]
+
+  fake-backup:
+    <<: *tollgate-image
+    entrypoint: ["fakeprovider"]
+    command: ["-listen", "0.0.0.0:8090", "-first-token-delay", "700ms", "-token-interval", "40ms"]
+
+  fake-flaky:
+    <<: *tollgate-image
+    entrypoint: ["fakeprovider"]
+    command: ["-listen", "0.0.0.0:8090", "-scenario", "status:529"]
+
+  tollgate:
+    <<: *tollgate-image
+    command: ["serve", "-config", "/etc/tollgate/tollgate.yaml"]
+    volumes:
+      - ./tollgate.yaml:/etc/tollgate/tollgate.yaml:ro
+      - ./admin-token:/etc/tollgate/admin-token:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:9090:9090"
+    depends_on: [fake-primary, fake-backup, fake-flaky, jaeger]
+
+  loadgen:
+    image: curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac
+    entrypoint: ["/bin/sh", "/loadgen.sh", "4"]
+    volumes:
+      - ./loadgen.sh:/loadgen.sh:ro
+    depends_on: [tollgate]
+
+  prometheus:
+    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./admin-token:/etc/prometheus/admin-token:ro
+    ports:
+      - "127.0.0.1:9091:9090"
+    depends_on: [tollgate]
+
+  grafana:
+    image: grafana/grafana:13.2.4@sha256:dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/tollgate.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      # Mount only these folders: the image has the other provisioning
+      # folders, and Grafana logs an error if one is missing.
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../grafana:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on: [prometheus, jaeger]
+
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0@sha256:836b967b5abcf1f7758066aa6b348619267a2f1459f72d472840570f9bd88a17
+    ports:
+      - "127.0.0.1:16686:16686"

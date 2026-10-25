@@ -688,3 +688,15 @@ func TestIsLoopback(t *testing.T) {
 		}
 	}
 }
+
+// TestDemoConfig checks the configuration of the demo stack in
+// deploy/compose.
+func TestDemoConfig(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "deploy", "compose", "tollgate.yaml"), OSEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.AdminToken.Value() == "" || cfg.Telemetry.OTLPEndpoint == "" || !cfg.Server.PProf {
+		t.Errorf("the demo needs an admin token, tracing and profiles: %+v %+v", cfg.Server, cfg.Telemetry)
+	}
+}

@@ -1,2 +1,4 @@
 # This page needs a GitHub login.
 ^https://github\.com/ykakade/tollgate/security/advisories/new$
+# The demo stack and the examples use local addresses.
+^https?://(127\.0\.0\.1|localhost)(:\d+)?(/.*)?$

@@ -82,6 +82,28 @@ links: ## Check the links in the Markdown files. Needs lychee.
 	@command -v lychee >/dev/null || { echo "lychee is not installed. Install it from https://lychee.cli.rs and try again." >&2; exit 1; }
 	lychee --no-progress './**/*.md'
 
+COMPOSE ?= docker compose -f deploy/compose/compose.yaml
+
+.PHONY: demo
+demo: demo-up ## Start the demo stack with Docker Compose and show its addresses.
+	@echo "Grafana:    http://127.0.0.1:3000"
+	@echo "Jaeger:     http://127.0.0.1:16686"
+	@echo "Prometheus: http://127.0.0.1:9091"
+	@echo "Tollgate:   http://127.0.0.1:8080 (metrics on 127.0.0.1:9090)"
+	@echo "Run \"make demo-down\" to stop the stack."
+
+.PHONY: demo-up
+demo-up: ## Build and start the demo stack in the background.
+	$(COMPOSE) up --build --detach --wait
+
+.PHONY: demo-check
+demo-check: ## Check that the running demo stack has live data.
+	deploy/compose/check.sh
+
+.PHONY: demo-down
+demo-down: ## Stop the demo stack and remove its containers.
+	$(COMPOSE) down --remove-orphans
+
 .PHONY: check
 check: fmt-check vet tidy-check build test test-integration lint ## Run all local checks that CI runs, except vuln and links.
 

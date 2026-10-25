@@ -1,0 +1,65 @@
+# The Tollgate configuration of the demo stack. See docs/observability.md.
+# Do not use it in production: the key below is public.
+version: 1
+
+server:
+  listen: ":8080"
+  # Prometheus reads /metrics from another container, so the admin port
+  # is not on a loopback address and needs a token.
+  admin_listen: ":9090"
+  admin_token: file:admin-token
+  pprof: true
+
+telemetry:
+  otlp_endpoint: http://jaeger:4318
+
+usage:
+  sink: jsonl
+  path: /tmp/usage.jsonl
+
+breaker:
+  min_requests: 5
+  open_for: 20s
+
+providers:
+  # Three copies of the fake provider. fake-flaky always answers 529.
+  fake-primary:
+    kind: anthropic
+    base_url: http://fake-primary:8090
+  fake-backup:
+    kind: anthropic
+    base_url: http://fake-backup:8090
+  fake-flaky:
+    kind: anthropic
+    base_url: http://fake-flaky:8090
+  fake-openai:
+    kind: openai
+    base_url: http://fake-primary:8090
+
+routes:
+  - model: claude-sonnet-5-5
+    api: anthropic
+    targets:
+      - provider: fake-primary
+      - provider: fake-backup
+  # The first target always fails, so this route shows fallbacks and an
+  # open circuit breaker.
+  - model: claude-haiku-5-5
+    api: anthropic
+    targets:
+      - provider: fake-flaky
+      - provider: fake-backup
+  - model: gpt-demo
+    api: openai
+    targets:
+      - provider: fake-openai
+
+tenants:
+  - id: demo
+    keys:
+      # The key is in deploy/compose/loadgen.sh.
+      - id: demo
+        hash: sha256:8bc8d1c4f6ce8dc40dcf8e429579ca72e4c0067145a3f92849be51145900c0c0
+    models: [claude-sonnet-5-5, claude-haiku-5-5, gpt-demo]
+    limits:
+      requests_per_minute: 600

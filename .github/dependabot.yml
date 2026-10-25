@@ -20,3 +20,21 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: chore
+  - package-ecosystem: docker
+    directory: /deploy/compose
+    schedule:
+      interval: weekly
+    groups:
+      demo-images:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore
+  - package-ecosystem: docker-compose
+    directory: /deploy/compose
+    schedule:
+      interval: weekly
+    groups:
+      demo-compose:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore
