@@ -9,7 +9,7 @@ server:
   max_body_bytes: 16MiB
   # After SIGTERM, the longest time that open requests can continue.
   drain_timeout: 10m
-  # The admin port serves /metrics for Prometheus. On an address that is
+  # The admin port serves the dashboard, admin API and /metrics. On an address that is
   # not 127.0.0.1, also set admin_token, for example env:TOLLGATE_ADMIN_TOKEN.
   admin_listen: "127.0.0.1:9090"
 
@@ -29,6 +29,8 @@ store:
 usage:
   sink: jsonl
   path: ./data/usage.jsonl
+  # The newest events retained for the admin API and dashboard.
+  index_events: 100000
 
 # Tollgate has a price table for the Anthropic models below. To use other
 # prices, copy pricing.yaml from the repository and set its path here.
@@ -36,6 +38,13 @@ usage:
 #   file: ./pricing.yaml
 
 # These defaults apply to all routes. See docs/reliability.md.
+# Session IDs derive from the original prompt prefix when the client has no
+# x-tollgate-session header. Sticky targets follow the provider cache TTL.
+sessions:
+  derive: true
+  sticky: true
+  warn_ratio: 0.8
+
 retry:
   max_attempts: 3
   budget_ratio: 0.1

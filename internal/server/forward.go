@@ -17,8 +17,10 @@ import (
 
 	"github.com/ykakade/tollgate/internal/config"
 	"github.com/ykakade/tollgate/internal/preflight"
+	"github.com/ykakade/tollgate/internal/pricing"
 	"github.com/ykakade/tollgate/internal/provider"
 	"github.com/ykakade/tollgate/internal/relay"
+	"github.com/ykakade/tollgate/internal/respcache"
 	"github.com/ykakade/tollgate/internal/router"
 	"github.com/ykakade/tollgate/internal/telemetry"
 )
@@ -42,6 +44,18 @@ type flow struct {
 	bodies [][]byte
 	// failures describes each failed attempt, for the error message.
 	failures []string
+	// clientBody is the request body as the client sent it, before
+	// redaction, for the key of the response cache.
+	clientBody []byte
+	// first is the index of the sticky target, or -1.
+	first int
+	// cut is the hard budget limit of a stream, or nil.
+	cut *cutoff
+	// cacheKey is the response cache key, or nil if the route does not
+	// use the response cache.
+	cacheKey *respcache.Key
+	// prices holds the price of each target, or nil.
+	prices []*pricing.Entry
 }
 
 func (f *flow) body(i int) ([]byte, error) {
@@ -59,7 +73,7 @@ func (f *flow) body(i int) ([]byte, error) {
 // forward sends the request to the targets of the route until one attempt
 // gives a response for the client (ADR 0021).
 func (s *Server) forward(ctx context.Context, x *exchange, f *flow) {
-	f.plan = s.router.Plan(f.list.keys, s.maxAttempts)
+	f.plan = s.router.PlanFrom(f.list.keys, s.maxAttempts, f.first)
 	i, ok := f.plan.First()
 	if !ok {
 		s.allBlocked(x, f)
@@ -141,9 +155,16 @@ func (s *Server) try(ctx context.Context, x *exchange, f *flow, i int) (int, boo
 	}
 
 	isStream := isEventStream(resp.Header)
+	streaming := isStream && ok2xx
 	var meter provider.Meter
 	if f.ep.metered && ok2xx {
 		meter = newMeter(f.ep.api, isStream)
+		if rm, ok := meter.(runningMeter); ok && streaming && f.cut != nil && i < len(f.prices) {
+			if price := f.prices[i]; price != nil {
+				rm.TrackOutput()
+				meter = &cutoffMeter{runningMeter: rm, price: price, inputTokens: preflight.EstimateInputTokens(len(body)), room: f.cut.room}
+			}
+		}
 	}
 	// Keep the downstream response open until a body byte arrives. Provider
 	// headers alone do not commit us to a successful response (ADR 0016).
@@ -153,18 +174,37 @@ func (s *Server) try(ctx context.Context, x *exchange, f *flow, i int) (int, boo
 		header:         resp.Header,
 		status:         resp.StatusCode,
 	}
+	if f.cacheKey != nil && ok2xx {
+		dst.capture = &captureWriter{limit: s.cache.MaxEntry()}
+	}
+	var out http.ResponseWriter = dst
+	var held *unmaskBody
+	if x.mapping.Len() > 0 && ok2xx {
+		if isStream {
+			out = &unmaskStream{responseStartWriter: dst, u: x.mapping.NewStreamUnmasker(dst, redactFormat(f.ep.api))}
+		} else {
+			held = &unmaskBody{responseStartWriter: dst, limit: unmaskBodyLimit}
+			out = held
+		}
+	}
 	var meterW io.Writer
 	if meter != nil {
 		meterW = meter
 	}
-	streaming := isStream && ok2xx
 	if streaming {
 		s.metrics.StreamStarted()
 	}
-	n, copyErr := a.Copy(dst, resp.Body, meterW)
+	n, copyErr := a.Copy(out, resp.Body, meterW)
 	if streaming {
 		s.metrics.StreamEnded()
 	}
+	if held != nil && copyErr == nil {
+		if err := held.finish(x.mapping); err != nil {
+			copyErr = fmt.Errorf("%w: %w", relay.ErrClientWrite, err)
+		}
+	}
+	cm, _ := meter.(*cutoffMeter)
+	x.cutoff = cm != nil && cm.hit && errors.Is(copyErr, errBudgetCutoff)
 	x.bytesOut = n
 	endAttempt(span, resp.StatusCode, copyErr)
 	if fb := a.FirstByte(); !fb.IsZero() {
@@ -176,12 +216,18 @@ func (s *Server) try(ctx context.Context, x *exchange, f *flow, i int) (int, boo
 		return s.failed(ctx, x, f, t, router.Result{Status: resp.StatusCode, Err: copyErr, ClientGone: clientGone})
 	}
 	if !reported {
-		_, outcome := router.Classify(router.Result{Status: resp.StatusCode, Err: copyErr, Started: dst.started, ClientGone: clientGone})
+		// A budget cutoff says nothing about the health of the target.
+		_, outcome := router.Classify(router.Result{Status: resp.StatusCode, Err: copyErr, Started: dst.started, ClientGone: clientGone || x.cutoff})
 		f.plan.Report(outcome)
 	}
 	switch {
 	case copyErr != nil && !dst.started:
 		s.lastFailed(ctx, x, f, t, copyErr, router.NoTarget)
+	case x.cutoff:
+		x.err = copyErr
+		x.incomplete = true
+		s.metrics.BudgetCutoff(f.cut.window)
+		s.writeStreamEvent(x, meter, f.cut.message)
 	case copyErr != nil:
 		x.err = copyErr
 		x.incomplete = true
@@ -191,10 +237,16 @@ func (s *Server) try(ctx context.Context, x *exchange, f *flow, i int) (int, boo
 	default:
 		// An empty response can complete without calling Write.
 		dst.commit()
+		if dst.capture != nil && !dst.capture.over {
+			s.cache.Put(*f.cacheKey, &respcache.Entry{ContentType: resp.Header.Get("Content-Type"), Body: dst.capture.buf.Bytes(), Provider: t.Provider, Model: t.Model}, s.now(), f.rt.cacheTTL)
+		}
 	}
 
 	if meter != nil {
 		x.usage, x.usageKnown = meter.Usage()
+		if x.cutoff {
+			x.usage, x.usageKnown, x.estimated = cm.usage(), true, true
+		}
 		if !x.usageKnown {
 			x.usage = provider.Usage{InputTokens: preflight.EstimateInputTokens(len(body))}
 			x.usageKnown, x.estimated = true, true

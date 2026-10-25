@@ -6,6 +6,7 @@ This page tells you how to make a change to Tollgate and how to send it for revi
 
 - Go (the version in `go.mod`)
 - GNU Make
+- Node.js with npm, for dashboard changes and `make web-check`
 - [golangci-lint](https://golangci-lint.run) v2
 - A C compiler, for the race detector. Without a C compiler, `make test` runs the tests without the race detector.
 - Redis, for the Redis store tests and the cluster tests. Set `TOLLGATE_TEST_REDIS_URL`, for example to `redis://localhost:6379/0`. If the variable is not set, these tests use only the memory store, or they are skipped. CI always sets it.
@@ -45,6 +46,9 @@ If a check fails, run `make help` to see the target for that check, and run it a
 | `make fuzz` | Runs each fuzz target for 30 s. Set `FUZZTIME` to change the time. |
 | `make record` | Records provider responses for the golden test. See [testdata/streams](testdata/streams/README.md). |
 | `make check` | Runs all local checks except `vuln` and `links`. |
+
+After dashboard changes, run `make web` and commit `web/dist` with its source. CI runs `make web-check`.
+Run `make replay` only when the replay model changes, and update the published results in `docs/agent-features.md`.
 
 ## Commits
 

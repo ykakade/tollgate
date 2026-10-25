@@ -3,7 +3,8 @@
 -- The formulas are the same as in limiter.go.
 --
 -- KEYS: for each rate, the counter of this minute and the counter of the
--- previous minute; then the counter of each budget.
+-- previous minute; then the counter of each budget; then the sticky
+-- routing entry, if any.
 -- ARGV: the number of rates, the number of budgets, the milliseconds since
 -- the start of this minute, the TTL of a rate counter in milliseconds; then
 -- the limit and the cost of each rate; then the limit, the amount, hard (1
@@ -11,7 +12,9 @@
 --
 -- The result is the 1-based index of the limit that stopped the request,
 -- or 0, then the value of each counter before the change: this minute and
--- the previous minute of each rate, then each budget.
+-- the previous minute of each rate, then each budget; then the value of the
+-- sticky routing entry, or 0, if the call has one. The script does not
+-- change the sticky routing entry.
 local nr = tonumber(ARGV[1])
 local nb = tonumber(ARGV[2])
 local elapsed = tonumber(ARGV[3])
@@ -50,6 +53,9 @@ if denied == 0 then
     redis.call('INCRBY', KEYS[2 * nr + j], ARGV[base + 4 * j - 2])
     redis.call('PEXPIRE', KEYS[2 * nr + j], ARGV[base + 4 * j])
   end
+end
+if #KEYS > 2 * nr + nb then
+  out[#out + 1] = tonumber(redis.call('GET', KEYS[#KEYS]) or '0') or 0
 end
 out[1] = denied
 return out

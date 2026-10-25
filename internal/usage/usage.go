@@ -47,6 +47,21 @@ type Event struct {
 	TTFTMs     *int64 `json:"ttft_ms"`
 	DurationMs int64  `json:"duration_ms"`
 	OverheadUs int64  `json:"overhead_us"`
+	// SessionDerived is true if Tollgate derived the session ID from the
+	// prompt prefix (ADR 0027).
+	SessionDerived bool `json:"session_derived,omitempty"`
+	// TargetSwitched is true if the request went to a different target
+	// than the previous request of its session. CacheLossMicroUSD is then
+	// the upper bound of the extra cost because the new target had no
+	// prompt cache for the session (ADR 0028).
+	TargetSwitched    bool  `json:"target_switched,omitempty"`
+	CacheLossMicroUSD int64 `json:"cache_loss_micro_usd,omitempty"`
+	// BudgetCutoff is true if Tollgate stopped the stream because a hard
+	// budget had no money left (ADR 0029).
+	BudgetCutoff bool `json:"budget_cutoff,omitempty"`
+	// Redacted is the number of values that Tollgate masked in the
+	// request (ADR 0031).
+	Redacted int `json:"redacted,omitempty"`
 }
 
 // Sink stores events.

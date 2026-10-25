@@ -339,3 +339,28 @@ func TestDelays(t *testing.T) {
 		})
 	}
 }
+
+func TestPromptCache(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	c := newPromptCache(5 * time.Minute)
+	turn1 := []byte(`{"system":"S","messages":[{"role":"user","content":"one"}]}`)
+	turn2 := []byte(`{"system":"S","messages":[{"role":"user","content":"one"},{"role":"assistant","content":"two"},{"role":"user","content":"three"}]}`)
+	if read, write := c.use(turn1, now); read != 0 || write != tokensFor(len(`"S"`)+len(`{"role":"user","content":"one"}`)) {
+		t.Errorf("first use: read %d, write %d", read, write)
+	}
+	read, write := c.use(turn2, now.Add(time.Minute))
+	if want := tokensFor(len(`"S"`) + len(`{"role":"user","content":"one"}`)); read != want || write <= 0 {
+		t.Errorf("second use: read %d (want %d), write %d", read, want, write)
+	}
+	// Each use starts the lifetime again, so 5 minutes after the second use
+	// the entries expired.
+	if read, _ := c.use(turn2, now.Add(5*time.Minute+59*time.Second)); read == 0 {
+		t.Error("an entry expired 5 minutes after the first use, not after the last use")
+	}
+	if read, _ := c.use(turn2, now.Add(11*time.Minute)); read != 0 {
+		t.Errorf("read %d after the entries expired", read)
+	}
+	if read, write := c.use([]byte(`{"messages":"x"}`), now); read != 0 || write != 0 {
+		t.Errorf("a body that is not a prompt: read %d, write %d", read, write)
+	}
+}

@@ -3,3 +3,5 @@ bin
 coverage.out
 data
 *.jsonl
+
+web/node_modules

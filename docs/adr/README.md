@@ -33,6 +33,14 @@ Each record has a number, a status, and a date. To change a decision, write a ne
 | [0025](0025-admin-port.md) | Serve metrics and profiles on a separate admin port | Accepted |
 | [0026](0026-otlp-json-exporter.md) | Export traces as OTLP JSON with an in-house exporter | Accepted |
 
+| [0027](0027-derived-sessions.md) | Derive session IDs from the original prompt prefix | Accepted |
+| [0028](0028-sticky-routing.md) | Keep the last successful target for the provider cache lifetime | Accepted |
+| [0029](0029-stream-budget-cutoff.md) | Cancel streams when estimated cumulative cost exceeds their hard budget room | Accepted |
+| [0030](0030-exact-response-cache.md) | Cache exact responses in bounded tenant-scoped memory | Accepted |
+| [0031](0031-pii-redaction.md) | Mask JSON strings with request-local placeholders | Accepted |
+| [0032](0032-admin-usage-index.md) | Serve a read-only admin API from a bounded event index | Accepted |
+| [0033](0033-embedded-dashboard.md) | Embed the dashboard build in the Go binary | Accepted |
+
 ## Template
 
 Use this structure for a new record. Copy the next number.

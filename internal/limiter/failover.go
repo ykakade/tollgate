@@ -64,7 +64,7 @@ func (f *Failover) Admit(ctx context.Context, r *Request) (Decision, error) {
 			return Decision{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
 	}
-	local := &Request{Now: r.Now, Rates: r.Rates}
+	local := &Request{Now: r.Now, Rates: r.Rates, Sticky: r.Sticky}
 	d, err := f.Local.Admit(ctx, local)
 	if err != nil {
 		return Decision{}, fmt.Errorf("local admit: %w", err)

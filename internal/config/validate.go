@@ -10,9 +10,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ykakade/tollgate"
 	"github.com/ykakade/tollgate/internal/pricing"
+	"github.com/ykakade/tollgate/internal/redact"
 )
 
 // nameRE is the syntax of provider, tenant and key names. These names go
@@ -48,6 +50,47 @@ func (v *validator) validate(c *Config) {
 	v.validatePrices(c)
 	v.validateRetry(c.Retry, c.Breaker)
 	v.validateTelemetry(&c.Telemetry)
+	v.validateSessions(c.Sessions)
+	v.validateResponseCache(c.ResponseCache)
+}
+
+// maxCacheTTL is the largest prompt cache and response cache lifetime.
+const maxCacheTTL = 24 * time.Hour
+
+func (v *validator) validateSessions(s Sessions) {
+	if math.IsNaN(s.WarnRatio) || s.WarnRatio <= 0 || s.WarnRatio > 1 {
+		v.add(v.line("sessions", "warn_ratio"), "The value of sessions.warn_ratio is not valid. Use a number that is more than 0 and not more than 1, for example 0.8.")
+	}
+}
+
+func (v *validator) validateResponseCache(c ResponseCache) {
+	if c.MaxBytes > maxBodyBytesLimit {
+		v.add(v.line("response_cache", "max_bytes"), "The value of response_cache.max_bytes is too large. Use 1GiB or less.")
+	}
+	if c.MaxEntryBytes > c.MaxBytes {
+		v.add(v.line("response_cache", "max_entry_bytes"), "The value of response_cache.max_entry_bytes is larger than response_cache.max_bytes. Make it smaller.")
+	}
+}
+
+// redactNameRE is the syntax of the name of a redaction pattern. The name
+// goes into the placeholder text that the model sees.
+var redactNameRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,31}$`)
+
+func (v *validator) validateRedact(i int, t Tenant) {
+	for j, k := range t.Redact.Kinds {
+		if !redact.KnownKind(k) {
+			v.add(v.line("tenants", i, "redact", "kinds", j), "The redaction kind %q of the tenant %q is not known. Use %s.", k, t.ID, strings.Join(redact.Kinds(), ", "))
+		}
+	}
+	for j, p := range t.Redact.Patterns {
+		line := v.line("tenants", i, "redact", "patterns", j)
+		if !redactNameRE.MatchString(p.Name) {
+			v.add(line, "The name %q of a redaction pattern of the tenant %q is not valid. Use 1 to 32 capital letters, digits and \"_\", for example EMPLOYEE_ID.", p.Name, t.ID)
+		}
+		if err := redact.CheckPattern(p.Regex); err != nil {
+			v.add(v.line("tenants", i, "redact", "patterns", j, "regex"), "The regex of the redaction pattern %q of the tenant %q is not valid: %v.", p.Name, t.ID, err)
+		}
+	}
 }
 
 func (v *validator) validateRetry(r Retry, b Breaker) {
@@ -103,6 +146,9 @@ func (v *validator) validateUsage(u *Usage) {
 	}
 	if u.QueueSize < 0 || u.QueueSize > maxUsageQueueSize {
 		v.add(v.line("usage", "queue_size"), "The value of usage.queue_size is not valid. Use a number from 1 to %d.", maxUsageQueueSize)
+	}
+	if u.IndexEvents < 0 || u.IndexEvents > maxUsageIndexEvents {
+		v.add(v.line("usage", "index_events"), "The value of usage.index_events is not valid. Use a number from 1 to %d.", maxUsageIndexEvents)
 	}
 }
 
@@ -216,6 +262,9 @@ func (v *validator) validateProviders(providers map[string]Provider) {
 		}
 		v.validateVertex(name, p)
 		v.validateBaseURL(name, p)
+		if p.CacheTTL > Duration(maxCacheTTL) {
+			v.add(v.line("providers", name, "cache_ttl"), "The cache_ttl of the provider %q is longer than 24h. Use the prompt cache lifetime of the provider, for example 5m or 1h.", name)
+		}
 		v.resolveSecret(&p.APIKey, fmt.Sprintf("The api_key of the provider %q", name), fmt.Sprintf("the API key of the provider %q", name))
 		providers[name] = p
 	}
@@ -379,6 +428,9 @@ func (v *validator) validateRoutes(routes []Route, providers map[string]Provider
 				v.add(v.line("routes", i, "timeouts", d.name), "The %s timeout of the route %q is longer than its total timeout. Make it shorter, or make the total timeout longer.", d.name, r.Model)
 			}
 		}
+		if c := r.ResponseCache; c.TTL > Duration(maxCacheTTL) || (!c.Enabled && c.TTL != 0) {
+			v.add(v.line("routes", i, "response_cache"), "The response_cache of the route %q is not valid. Set enabled to true, and use a ttl of 24h or less.", r.Model)
+		}
 	}
 	return models
 }
@@ -424,6 +476,7 @@ func (v *validator) validateTenants(tenants []Tenant, routeModels map[string]boo
 			v.add(line, "The tenant %q has no models. Add one route model or more to models.", t.ID)
 		}
 		v.validateLimits(i, t)
+		v.validateRedact(i, t)
 		for j, m := range t.Models {
 			switch {
 			case m == "":

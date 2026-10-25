@@ -71,6 +71,7 @@ const (
 
 	DefaultUsagePath           = "./data/usage.jsonl"
 	DefaultUsageQueueSize      = 10000
+	DefaultUsageIndexEvents    = 100000
 	DefaultReserveOutputTokens = 4096
 
 	DefaultMaxAttempts  = 3
@@ -78,6 +79,18 @@ const (
 	DefaultFailureRatio = 0.5
 	DefaultMinRequests  = 20
 	DefaultOpenFor      = 30 * time.Second
+
+	// DefaultCacheTTL is the prompt cache lifetime of a provider. The
+	// Anthropic and OpenAI prompt caches and the Ollama keep_alive time
+	// all default to 5 minutes.
+	DefaultCacheTTL = 5 * time.Minute
+	// DefaultWarnRatio is the part of a session budget at which Tollgate
+	// writes a warning.
+	DefaultWarnRatio = 0.8
+
+	DefaultResponseCacheBytes      = 64 << 20
+	DefaultResponseCacheEntryBytes = 1 << 20
+	DefaultResponseCacheTTL        = 10 * time.Minute
 )
 
 // Store kinds.
@@ -108,6 +121,7 @@ const (
 // do its arithmetic in float64 without a loss, as Redis Lua does.
 const (
 	maxUsageQueueSize      = 1_000_000
+	maxUsageIndexEvents    = 10_000_000
 	maxReserveOutputTokens = 10_000_000
 	maxRequestsPerMinute   = 1_000_000_000
 	maxTokensPerMinute     = 10_000_000_000
@@ -144,6 +158,10 @@ type Config struct {
 	Retry       Retry               `yaml:"retry"`
 	Breaker     Breaker             `yaml:"breaker"`
 	Telemetry   Telemetry           `yaml:"telemetry"`
+	Sessions    Sessions            `yaml:"sessions"`
+	// ResponseCache holds the limits of the exact response cache. Each
+	// route turns the cache on for itself.
+	ResponseCache ResponseCache `yaml:"response_cache"`
 
 	// Prices is the price table: the file in Pricing.File, or the table
 	// in the binary.
@@ -165,6 +183,9 @@ type Usage struct {
 	// directory of the configuration file.
 	Path      string `yaml:"path"`
 	QueueSize int    `yaml:"queue_size"`
+	// IndexEvents is the number of recent events that Tollgate keeps in
+	// memory for the admin API and the dashboard (ADR 0032).
+	IndexEvents int `yaml:"index_events"`
 }
 
 // Pricing holds the settings of the price table.
@@ -197,6 +218,60 @@ type Server struct {
 	PProf bool `yaml:"pprof"`
 }
 
+// Sessions holds the settings of agent sessions (ADR 0027 and ADR 0028).
+type Sessions struct {
+	// Derive gives a request without the x-tollgate-session header a
+	// session ID from a hash of its prompt prefix. Load sets the default,
+	// true.
+	Derive *bool `yaml:"derive"`
+	// Sticky sends the requests of a session to the target of the
+	// previous request of the session, while that target is available.
+	// Load sets the default, true.
+	Sticky *bool `yaml:"sticky"`
+	// WarnRatio is the part of a session budget at which Tollgate writes
+	// a warning.
+	WarnRatio float64 `yaml:"warn_ratio"`
+}
+
+// DeriveOn reports whether Tollgate derives session IDs.
+func (s Sessions) DeriveOn() bool { return s.Derive == nil || *s.Derive }
+
+// StickyOn reports whether sticky routing is on.
+func (s Sessions) StickyOn() bool { return s.Sticky == nil || *s.Sticky }
+
+// ResponseCache holds the limits of the exact response cache (ADR 0030).
+type ResponseCache struct {
+	// MaxBytes is the largest total size of the cached responses.
+	MaxBytes Size `yaml:"max_bytes"`
+	// MaxEntryBytes is the largest response that the cache keeps.
+	MaxEntryBytes Size `yaml:"max_entry_bytes"`
+}
+
+// RouteCache turns the exact response cache on for one route.
+type RouteCache struct {
+	Enabled bool `yaml:"enabled"`
+	// TTL is the lifetime of a cached response.
+	TTL Duration `yaml:"ttl"`
+}
+
+// Redact holds the PII redaction settings of a tenant (ADR 0031).
+type Redact struct {
+	// Kinds are built-in detectors, for example "email".
+	Kinds []string `yaml:"kinds"`
+	// Patterns are detectors with a regular expression.
+	Patterns []RedactPattern `yaml:"patterns"`
+}
+
+// On reports whether the tenant has a detector.
+func (r Redact) On() bool { return len(r.Kinds) > 0 || len(r.Patterns) > 0 }
+
+// RedactPattern is a detector with a regular expression.
+type RedactPattern struct {
+	// Name goes into the placeholder, for example "EMPLOYEE_ID".
+	Name  string `yaml:"name"`
+	Regex string `yaml:"regex"`
+}
+
 // Telemetry holds the settings of the traces.
 type Telemetry struct {
 	// OTLPEndpoint is the URL of an OTLP/HTTP trace receiver, for example
@@ -214,6 +289,9 @@ type Provider struct {
 	// Region is the Vertex AI location of a vertex provider: "global",
 	// a multi-region such as "us", or a region such as "us-east5".
 	Region string `yaml:"region"`
+	// CacheTTL is the lifetime of the prompt cache of the provider. A
+	// sticky routing entry lasts this long after the last request.
+	CacheTTL Duration `yaml:"cache_ttl"`
 }
 
 // Retry holds the retry rules of all routes (ADR 0021 and ADR 0022).
@@ -244,6 +322,8 @@ type Route struct {
 	API      API      `yaml:"api"`
 	Targets  []Target `yaml:"targets"`
 	Timeouts Timeouts `yaml:"timeouts"`
+	// ResponseCache turns the exact response cache on for the route.
+	ResponseCache RouteCache `yaml:"response_cache"`
 }
 
 // Target is one provider and one model of a route.
@@ -267,6 +347,19 @@ type Tenant struct {
 	Models  []string `yaml:"models"`
 	Limits  Limits   `yaml:"limits"`
 	Budgets []Budget `yaml:"budgets"`
+	// Redact masks personal data in the requests of the tenant.
+	Redact Redact `yaml:"redact"`
+}
+
+// SessionBudget returns the session budget of the tenant. The bool is
+// false if the tenant has none.
+func (t *Tenant) SessionBudget() (Budget, bool) {
+	for _, b := range t.Budgets {
+		if b.Window == WindowSession {
+			return b, true
+		}
+	}
+	return Budget{}, false
 }
 
 // Limits are the rate limits of a tenant. A value of 0 means no limit.
@@ -394,6 +487,9 @@ func (c *Config) applyDefaults(v *validator) {
 	if c.Usage.QueueSize == 0 {
 		c.Usage.QueueSize = DefaultUsageQueueSize
 	}
+	if c.Usage.IndexEvents == 0 {
+		c.Usage.IndexEvents = DefaultUsageIndexEvents
+	}
 	if c.Reservation.OutputTokens == 0 {
 		c.Reservation.OutputTokens = DefaultReserveOutputTokens
 	}
@@ -410,6 +506,15 @@ func (c *Config) applyDefaults(v *validator) {
 		c.Breaker.MinRequests = DefaultMinRequests
 	}
 	setDefault(&c.Breaker.OpenFor, DefaultOpenFor)
+	if !v.isSet("sessions", "warn_ratio") {
+		c.Sessions.WarnRatio = DefaultWarnRatio
+	}
+	if c.ResponseCache.MaxBytes == 0 {
+		c.ResponseCache.MaxBytes = DefaultResponseCacheBytes
+	}
+	if c.ResponseCache.MaxEntryBytes == 0 {
+		c.ResponseCache.MaxEntryBytes = DefaultResponseCacheEntryBytes
+	}
 	for i := range c.Tenants {
 		for j := range c.Tenants[i].Budgets {
 			if c.Tenants[i].Budgets[j].Mode == "" {
@@ -420,8 +525,9 @@ func (c *Config) applyDefaults(v *validator) {
 	for name, p := range c.Providers {
 		if p.BaseURL == "" {
 			p.BaseURL = defaultBaseURLs[p.Kind]
-			c.Providers[name] = p
 		}
+		setDefault(&p.CacheTTL, DefaultCacheTTL)
+		c.Providers[name] = p
 	}
 	for i := range c.Routes {
 		r := &c.Routes[i]
@@ -435,6 +541,9 @@ func (c *Config) applyDefaults(v *validator) {
 		setDefault(&t.FirstToken, DefaultFirstTokenTimeout)
 		setDefault(&t.Idle, DefaultIdleTimeout)
 		setDefault(&t.Total, DefaultTotalTimeout)
+		if r.ResponseCache.Enabled {
+			setDefault(&r.ResponseCache.TTL, DefaultResponseCacheTTL)
+		}
 	}
 }
 

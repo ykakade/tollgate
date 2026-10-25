@@ -13,6 +13,7 @@ import (
 	"github.com/ykakade/tollgate/internal/preflight"
 	"github.com/ykakade/tollgate/internal/pricing"
 	"github.com/ykakade/tollgate/internal/provider"
+	"github.com/ykakade/tollgate/internal/redact"
 	"github.com/ykakade/tollgate/internal/telemetry"
 	"github.com/ykakade/tollgate/internal/usage"
 )
@@ -34,6 +35,9 @@ type tenantPolicy struct {
 	models  map[string]bool
 	limits  config.Limits
 	budgets []config.Budget
+	// redactor masks personal data in the requests of the tenant, or is
+	// nil.
+	redactor *redact.Redactor
 }
 
 // admission is the result of the limit check of one request.
@@ -49,11 +53,14 @@ type admission struct {
 	// used holds the configured budget of each entry in budgets.
 	used     []config.Budget
 	decision limiter.Decision
+	// sticky is the key of the sticky routing entry of the session, or "".
+	sticky string
+	list   *targetList
 }
 
-// counted reports whether the request changed counters in the store.
+// counted reports whether the request uses the store.
 func (a *admission) counted() bool {
-	return len(a.rates) > 0 || len(a.budgets) > 0
+	return len(a.rates) > 0 || len(a.budgets) > 0 || a.sticky != ""
 }
 
 // admit checks the rate limits and budgets of the request and reserves its
@@ -63,7 +70,7 @@ func (s *Server) admit(ctx context.Context, x *exchange, ep endpoint, list *targ
 	tenant := x.identity.TenantID
 	tp := s.tenants[tenant]
 	now := s.now()
-	a := &admission{}
+	a := &admission{list: list}
 	for i, t := range list.targets {
 		price := s.prices.Find(t.Provider, t.kind, t.Model, now)
 		est := budget.NewEstimate(price, preflight.EstimateInputTokens(bodyLen), pre.MaxTokens, s.reserveOutput)
@@ -80,11 +87,14 @@ func (s *Server) admit(ctx context.Context, x *exchange, ep endpoint, list *targ
 		a.est = budget.Estimate{}
 	}
 	a.rates = budget.Rates(tenant, tp.limits, a.est.Tokens(), ep.metered)
+	req := &limiter.Request{Now: now, Rates: a.rates, Budgets: a.budgets}
+	a.sticky = stickyRequest(req, tenant, x.session, list, ep.metered)
 	if !a.counted() {
+		a.decision.Allowed = true
 		return a, true
 	}
 
-	d, err := s.store.Admit(ctx, &limiter.Request{Now: now, Rates: a.rates, Budgets: a.budgets})
+	d, err := s.store.Admit(ctx, req)
 	if err != nil {
 		x.err = err
 		x.fail(http.StatusServiceUnavailable, fmt.Sprintf("Tollgate cannot check the budget of the tenant %q, because the limit store is not available. Send the request again later.", tenant), storeRetryAfter)
@@ -95,6 +105,7 @@ func (s *Server) admit(ctx context.Context, x *exchange, ep endpoint, list *targ
 	for k, v := range x.limitHeader {
 		x.w.Header()[k] = v
 	}
+	sessionHeader(x, a)
 	if d.Allowed {
 		s.warnSoftBudgets(ctx, x, a)
 		return a, true
@@ -185,11 +196,20 @@ func (s *Server) settle(ctx context.Context, x *exchange, a *admission) {
 	if x.usageKnown && x.served >= 0 {
 		x.cost = budget.Charge(a.prices[x.served], x.usage, x.estimated || x.incomplete, a.costs[x.served])
 		tokens = totalTokens(x.usage)
+		if x.prevTarget >= 0 && x.prevTarget != x.served {
+			x.switched = true
+			x.cacheLoss = cacheLoss(a.prices[x.served], x.usage)
+		}
 	}
 	if !a.counted() || !a.decision.Allowed {
 		return
 	}
+	s.warnSession(ctx, x, a)
 	st := &limiter.Settlement{Now: s.now(), Minute: a.decision.Minute, Local: a.decision.Local}
+	if a.sticky != "" && x.served >= 0 && x.status >= 200 && x.status < 300 {
+		t := a.list.targets[x.served]
+		st.Sticky = &limiter.Entry{Key: a.sticky, Value: stickyValue(x.served, t), TTL: t.cacheTTL}
+	}
 	for _, r := range a.rates {
 		if r.Key == budget.TokensKey(x.identity.TenantID) {
 			st.Rates = append(st.Rates, limiter.Adjust{Key: r.Key, Delta: tokens - r.Cost})
@@ -222,7 +242,7 @@ func (x *exchange) event() usage.Event {
 		ProviderModel:      x.providerModel,
 		Status:             x.status,
 		Attempts:           x.attempts,
-		Cache:              "bypass",
+		Cache:              x.cacheLabel(),
 		InputTokens:        x.usage.InputTokens,
 		OutputTokens:       x.usage.OutputTokens,
 		CacheReadTokens:    x.usage.CacheReadTokens,
@@ -233,6 +253,11 @@ func (x *exchange) event() usage.Event {
 		CostMicroUSD:       x.cost,
 		DurationMs:         time.Since(x.start).Milliseconds(),
 		OverheadUs:         x.overhead.Microseconds(),
+		SessionDerived:     x.sessionDerived,
+		TargetSwitched:     x.switched,
+		CacheLossMicroUSD:  x.cacheLoss,
+		BudgetCutoff:       x.cutoff,
+		Redacted:           x.mapping.Len(),
 	}
 	if x.ttft >= 0 {
 		ms := x.ttft.Milliseconds()

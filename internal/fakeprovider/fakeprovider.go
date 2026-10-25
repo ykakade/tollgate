@@ -48,6 +48,10 @@ type Config struct {
 	// A reply that is not a stream waits for all its tokens before it
 	// sends the body.
 	TokenInterval time.Duration
+	// PromptCache, if not 0, turns on a simulated prompt cache with this
+	// lifetime. The usage of each reply then has cache read and cache
+	// write tokens.
+	PromptCache time.Duration
 }
 
 // Server is a fake provider. Use New to make one.
@@ -61,6 +65,8 @@ type Server struct {
 	scenario atomic.Pointer[string]
 
 	firstDelay, interval time.Duration
+	// cache is the simulated prompt cache, or nil.
+	cache *promptCache
 }
 
 // New returns a Server with the given configuration.
@@ -77,6 +83,9 @@ func New(cfg Config) *Server {
 	}
 	if s.now == nil {
 		s.now = time.Now
+	}
+	if cfg.PromptCache > 0 {
+		s.cache = newPromptCache(cfg.PromptCache)
 	}
 	s.scenario.Store(&cfg.Scenario)
 	return s
@@ -130,7 +139,19 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 
 // inputTokens returns the input token count for a request body.
 func inputTokens(body []byte) int {
-	return (len(body) + bytesPerInputToken - 1) / bytesPerInputToken
+	return tokensFor(len(body))
+}
+
+// promptUsage returns the input tokens of a request body that the prompt
+// cache did not read or write, and the cache read and write tokens. With no
+// prompt cache, all tokens are input tokens.
+func (s *Server) promptUsage(body []byte) (input, read, write int) {
+	total := inputTokens(body)
+	if s.cache == nil {
+		return total, 0, 0
+	}
+	read, write = s.cache.use(body, s.now())
+	return max(total-read-write, 0), read, write
 }
 
 // bodyErrorStatus returns the HTTP status for an error from readBody.

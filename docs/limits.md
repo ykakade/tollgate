@@ -69,9 +69,9 @@ A budget is the largest spend of a tenant in a window, in USD. Tollgate calculat
 | Window | Period | Key |
 | --- | --- | --- |
 | `month` | The calendar month in UTC | The tenant |
-| `session` | All requests with the same `x-tollgate-session` header. The spend ends 24 hours after the last request of the session. | The tenant and the session ID |
+| `session` | All requests with the same explicit or derived session ID. The spend ends 24 hours after the last request of the session. | The tenant and the session ID |
 
-A request without the `x-tollgate-session` header has no session budget. A session ID has 1 to 128 visible ASCII characters, with no spaces. For other values, Tollgate sends status 400.
+Without `x-tollgate-session`, Tollgate derives a session ID from the original prompt prefix by default. Requests without a derivable prefix have no session budget. See [agent features](agent-features.md). A session ID has 1 to 128 visible ASCII characters, with no spaces. For other values, Tollgate sends status 400.
 
 | Mode | When the budget has no money left for a request |
 | --- | --- |
@@ -112,7 +112,9 @@ A request without an output limit (OpenAI permits this) has no bound. Its output
 
 `TestWorstCaseOverspend` in `internal/server/cluster_test.go` checks the bound with three Tollgate copies that share one budget. In the test, 120 parallel requests each reserve 223 micro-USD and use all of their `max_tokens`, at a cost of 2,023 micro-USD each. The budget of 10,000 micro-USD admits 44 requests. The spend is 89,012 micro-USD, and the bound is 89,200 micro-USD.
 
-Tollgate does not stop a stream that started when its spend reaches the limit. M6 adds that for session budgets.
+Tollgate now applies an approximate cutoff to successful event streams with hard budgets. It uses reported input usage and an output estimate.
+Non-stream responses retain the admission-only bound above. Concurrent streams, token estimate error and cancellation delay can still cause overspend.
+See [agent features](agent-features.md#budgets-and-projection) and [ADR 0029](adr/0029-stream-budget-cutoff.md).
 
 ## When the limit store fails
 
@@ -133,4 +135,4 @@ If the settle step fails, the reservation stays in the budget until the end of t
 
 With `store.kind: memory`, Tollgate reads the usage file at start, before it accepts requests. It adds the spend of the current month and of the sessions of the last 24 hours to the budgets ([ADR 0019](adr/0019-rebuild-spend.md)). The rate limit counters start at 0.
 
-With `store.kind: redis`, Redis keeps the counters, and Tollgate does not read the usage file.
+With `store.kind: redis`, Redis keeps the counters. Tollgate reads JSONL for the admin index, but does not restore Redis counters from it.

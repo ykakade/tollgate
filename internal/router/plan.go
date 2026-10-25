@@ -25,7 +25,10 @@ type Plan struct {
 	r    *Router
 	keys []Key
 	max  int
+	// order holds the target indexes in the order of the attempts.
+	order []int
 
+	// cur is the position in order of the current target.
 	cur      int
 	attempts int
 	retried  bool // The current target had its one RetrySame.
@@ -37,8 +40,24 @@ type Plan struct {
 // at most maxAttempts attempts. It counts the request for the retry
 // budget.
 func (r *Router) Plan(keys []Key, maxAttempts int) *Plan {
+	return r.PlanFrom(keys, maxAttempts, 0)
+}
+
+// PlanFrom is Plan with the target first in front of the other targets,
+// for sticky routing. The other targets keep their order. If first is not
+// a valid index, the order does not change.
+func (r *Router) PlanFrom(keys []Key, maxAttempts, first int) *Plan {
 	r.request()
-	return &Plan{r: r, keys: keys, max: maxAttempts, cur: -1}
+	order := make([]int, 0, len(keys))
+	if first > 0 && first < len(keys) {
+		order = append(order, first)
+	}
+	for i := range keys {
+		if i != first || len(order) == 0 {
+			order = append(order, i)
+		}
+	}
+	return &Plan{r: r, keys: keys, max: maxAttempts, order: order, cur: -1}
 }
 
 // First returns the index of the target of the first attempt. It returns
@@ -62,8 +81,9 @@ func (p *Plan) Next(a Action) (int, Stop, bool) {
 	if a == RetrySame && !p.retried {
 		start = p.cur
 	}
-	for i := start; i < len(p.keys); i++ {
-		same := i == p.cur
+	for pos := start; pos < len(p.order); pos++ {
+		i := p.order[pos]
+		same := pos == p.cur
 		t, why := p.r.Allow(p.keys[i])
 		if why != NotBlocked {
 			if !same {
@@ -75,7 +95,7 @@ func (p *Plan) Next(a Action) (int, Stop, bool) {
 			p.r.Report(t, Neutral)
 			return 0, BudgetExhausted, false
 		}
-		p.use(i, t)
+		p.use(pos, t)
 		p.retried = same
 		return i, NoTarget, true
 	}
@@ -83,20 +103,21 @@ func (p *Plan) Next(a Action) (int, Stop, bool) {
 }
 
 func (p *Plan) find(start int) (int, bool) {
-	for i := start; i < len(p.keys); i++ {
+	for pos := start; pos < len(p.order); pos++ {
+		i := p.order[pos]
 		t, why := p.r.Allow(p.keys[i])
 		if why != NotBlocked {
 			p.skipped = append(p.skipped, Skip{Index: i, Reason: why})
 			continue
 		}
-		p.use(i, t)
+		p.use(pos, t)
 		return i, true
 	}
 	return 0, false
 }
 
-func (p *Plan) use(i int, t Ticket) {
-	p.cur = i
+func (p *Plan) use(pos int, t Ticket) {
+	p.cur = pos
 	p.ticket = t
 	p.attempts++
 }

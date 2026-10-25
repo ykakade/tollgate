@@ -43,7 +43,7 @@ tollgate init > tollgate.yaml
 | `listen` | text | `:8080` | The address of the data plane, as `host:port`. |
 | `max_body_bytes` | size | `16MiB` | The largest request body that Tollgate accepts. The maximum value is `1GiB`. A larger body gets status 413. |
 | `drain_timeout` | duration | `10m` | After `SIGTERM`, the longest time that open requests can continue. See [operations](operations.md). |
-| `admin_listen` | text | `127.0.0.1:9090` | The address of the admin port, as `host:port`. It serves `/metrics`. Use a port that is different from `listen`. |
+| `admin_listen` | text | `127.0.0.1:9090` | The address of the admin port, as `host:port`. It serves the dashboard, admin API and `/metrics`. Use a port that is different from `listen`. |
 | `admin_token` | reference | none | The bearer token of the admin port, as `env:NAME` or `file:/path`. Necessary if `admin_listen` is not a loopback address. |
 | `pprof` | boolean | `false` | `true` adds the Go profiles under `/debug/pprof/` on the admin port. |
 
@@ -215,7 +215,7 @@ Each budget has a different window. See [budgets](limits.md#budgets).
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `window` | text | none | `month` for the calendar month in UTC. `session` for the requests with the same `x-tollgate-session` header. |
+| `window` | text | none | `month` for the calendar month in UTC. `session` for the requests with the same explicit or derived session ID. |
 | `limit_usd` | amount | none | The largest spend in USD, with at most 6 decimal places, for example `50` or `0.25`. |
 | `mode` | text | `hard` | `hard` refuses requests with status 402 when the budget has no money left. `soft` only writes a warning to the log. |
 
@@ -303,3 +303,25 @@ tenants:
 ```
 
 The `local/qwen2.5-coder` target costs 0 unless the price table has an explicit entry.
+
+## Agent features and dashboard
+
+See [agent features](agent-features.md) for procedures and [admin API](admin-api.md) for data limits.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `sessions.derive` | `true` | Derive session IDs from the original prompt prefix without an explicit header. |
+| `sessions.sticky` | `true` | Prefer the previous successful target of the session. |
+| `sessions.warn_ratio` | `0.8` | Warn when settled session spend crosses this fraction, greater than 0 and at most 1. |
+| `providers.<name>.cache_ttl` | `5m` | Sticky target lifetime, greater than 0 and at most `24h`. Match the provider prompt cache lifetime. |
+| `response_cache.max_bytes` | `64MiB` | Total response-cache size, at most `1GiB`. |
+| `response_cache.max_entry_bytes` | `1MiB` | Maximum cached response body, at most `max_bytes`. |
+| `routes[].response_cache.enabled` | `false` | Enable the exact response cache for this route. |
+| `routes[].response_cache.ttl` | `10m` when enabled | Response lifetime, greater than 0 and at most `24h`. |
+| `tenants[].redact.kinds` | Empty | Built-in detectors: `email`, `credit_card`, `ipv4`, `us_ssn`. |
+| `tenants[].redact.patterns[].name` | Required | Placeholder name: 1–32 capital letters, digits or underscores; first character is a letter. |
+| `tenants[].redact.patterns[].regex` | Required | Go regular expression, at most 1,024 characters, which must not match empty text. |
+| `usage.index_events` | `100000` | In-memory history capacity, at most `10000000` events. |
+
+The binary serves the dashboard automatically on `server.admin_listen`. No separate dashboard process is required.
+A configured admin token protects the API, metrics and profiles. Public static dashboard files contain no usage data.

@@ -156,17 +156,8 @@ func readSpend(r io.Reader, now time.Time, window time.Duration) (Spend, error) 
 	type sessionKey struct{ tenant, session string }
 	sessions := make(map[sessionKey]*SessionSpend)
 	y, m, _ := now.UTC().Date()
-	add := func(line []byte) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			return
-		}
-		var e Event
-		if err := json.Unmarshal(line, &e); err != nil || e.TenantID == "" {
-			sp.Bad++
-			return
-		}
-		sp.Events++
+	var err error
+	sp.Events, sp.Bad, err = scan(r, func(e *Event) {
 		if ey, em, _ := e.TS.UTC().Date(); ey == y && em == m {
 			sp.Month[e.TenantID] += e.CostMicroUSD
 		}
@@ -182,25 +173,9 @@ func readSpend(r io.Reader, now time.Time, window time.Duration) (Spend, error) 
 				s.Last = e.TS
 			}
 		}
-	}
-	br := bufio.NewReaderSize(r, maxLineBytes)
-	for {
-		line, err := br.ReadSlice('\n')
-		if errors.Is(err, bufio.ErrBufferFull) {
-			// Skip the rest of a line that is too long.
-			sp.Bad++
-			for errors.Is(err, bufio.ErrBufferFull) {
-				_, err = br.ReadSlice('\n')
-			}
-		} else {
-			add(line)
-		}
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return sp, fmt.Errorf("read usage file: %w", err)
-		}
+	})
+	if err != nil {
+		return sp, err
 	}
 	for _, s := range sessions {
 		if now.Sub(s.Last) < window {
@@ -211,4 +186,58 @@ func readSpend(r io.Reader, now time.Time, window time.Duration) (Spend, error) 
 		return cmp.Or(strings.Compare(a.TenantID, b.TenantID), strings.Compare(a.SessionID, b.SessionID))
 	})
 	return sp, nil
+}
+
+// scan reads the events of a usage file and calls fn for each event. It
+// skips lines that are not events, for example a partial last line, and
+// lines that are longer than maxLineBytes. It returns the number of events
+// and of bad lines.
+func scan(r io.Reader, fn func(e *Event)) (events, bad int, err error) {
+	add := func(line []byte) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			return
+		}
+		var e Event
+		if err := json.Unmarshal(line, &e); err != nil || e.TenantID == "" {
+			bad++
+			return
+		}
+		events++
+		fn(&e)
+	}
+	br := bufio.NewReaderSize(r, maxLineBytes)
+	for {
+		line, rerr := br.ReadSlice('\n')
+		if errors.Is(rerr, bufio.ErrBufferFull) {
+			// Skip the rest of a line that is too long.
+			bad++
+			for errors.Is(rerr, bufio.ErrBufferFull) {
+				_, rerr = br.ReadSlice('\n')
+			}
+		} else {
+			add(line)
+		}
+		if errors.Is(rerr, io.EOF) {
+			return events, bad, nil
+		}
+		if rerr != nil {
+			return events, bad, fmt.Errorf("read usage file: %w", rerr)
+		}
+	}
+}
+
+// ReadEvents reads the usage file at path and calls fn for each event. A
+// missing file has no events. It returns the number of events and of bad
+// lines.
+func ReadEvents(path string, fn func(e *Event)) (events, bad int, err error) {
+	f, err := os.Open(path) //nolint:gosec // The operator gives the path in the configuration.
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, fmt.Errorf("open usage file: %w", err)
+	}
+	defer f.Close()
+	return scan(f, fn)
 }

@@ -172,7 +172,8 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, start time.Tim
 		stopReason = "max_tokens"
 	}
 	id := fmt.Sprintf("msg_fake_%06d", s.nextID())
-	usage := &anthropicUsage{InputTokens: inputTokens(body), OutputTokens: len(chunks)}
+	input, read, write := s.promptUsage(body)
+	usage := &anthropicUsage{InputTokens: input, CacheReadInputTokens: read, CacheCreationInputTokens: write, OutputTokens: len(chunks)}
 	if sc.kind == kindNoUsage {
 		usage = nil
 	}

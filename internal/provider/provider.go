@@ -36,6 +36,15 @@ type Usage struct {
 	ReasoningTokens int64
 }
 
+// BytesPerToken is the ratio of text bytes to tokens of the estimates of
+// Tollgate (ADR 0003).
+const BytesPerToken = 4
+
+// TokensForBytes returns the token estimate of n bytes of text.
+func TokensForBytes(n int64) int64 {
+	return (n + BytesPerToken - 1) / BytesPerToken
+}
+
 // ErrMalformed is the error of a Meter when the response is not valid in
 // the wire format of the provider.
 var ErrMalformed = errors.New("malformed response")

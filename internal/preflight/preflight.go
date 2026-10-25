@@ -9,7 +9,10 @@ package preflight
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -51,6 +54,9 @@ type Request struct {
 	members       int
 	// anthropicVersion is true if the body has an anthropic_version member.
 	anthropicVersion bool
+	// system and messages are the values of the system and messages
+	// members, or zero.
+	system, messages span
 }
 
 // Decode reads the fields of body. It returns an error that wraps one of
@@ -94,7 +100,7 @@ func Decode(body []byte) (*Request, error) {
 			} else {
 				maxCompletion = n
 			}
-		case "model", "stream", "stream_options":
+		case "model", "stream", "stream_options", "system", "messages":
 			v, err := dec.ReadValue()
 			if err != nil {
 				return nil, fmt.Errorf("%w: %w", ErrNotJSON, err)
@@ -128,6 +134,10 @@ func Decode(body []byte) (*Request, error) {
 				}
 			case "stream_options":
 				r.streamOptions = sp
+			case "system":
+				r.system = sp
+			case "messages":
+				r.messages = sp
 			}
 		default:
 			if err := dec.SkipValue(); err != nil {
@@ -149,6 +159,42 @@ func Decode(body []byte) (*Request, error) {
 		r.MaxTokens = maxCompletion
 	}
 	return r, nil
+}
+
+// PrefixHash returns a hash of the start of the prompt: the system member
+// and the messages up to the first message with the role "user". Requests
+// of one agent session share this prefix, and the provider prompt cache
+// depends on it too (ADR 0027). PrefixHash returns "" if the body has no
+// message with the role "user".
+//
+// The result is 32 lowercase hex digits.
+func (r *Request) PrefixHash() string {
+	if r.messages == (span{}) {
+		return ""
+	}
+	h := sha256.New()
+	h.Write([]byte("system\x00"))
+	h.Write(r.body[r.system.start:r.system.end])
+	h.Write([]byte("\x00messages\x00"))
+	dec := jsontext.NewDecoder(bytes.NewReader(r.body[r.messages.start:r.messages.end]))
+	if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '[' {
+		return ""
+	}
+	for dec.PeekKind() == '{' {
+		v, err := dec.ReadValue()
+		if err != nil {
+			return ""
+		}
+		h.Write(v)
+		h.Write([]byte{0})
+		var m struct {
+			Role string `json:"role"`
+		}
+		if json.Unmarshal(v, &m) == nil && m.Role == "user" {
+			return hex.EncodeToString(h.Sum(nil)[:16])
+		}
+	}
+	return ""
 }
 
 // commaAfter returns the offset after the comma that follows offset i,

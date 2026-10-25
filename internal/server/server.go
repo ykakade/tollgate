@@ -27,7 +27,9 @@ import (
 	"github.com/ykakade/tollgate/internal/provider/anthropic"
 	"github.com/ykakade/tollgate/internal/provider/openai"
 	"github.com/ykakade/tollgate/internal/provider/vertex"
+	"github.com/ykakade/tollgate/internal/redact"
 	"github.com/ykakade/tollgate/internal/relay"
+	"github.com/ykakade/tollgate/internal/respcache"
 	"github.com/ykakade/tollgate/internal/router"
 	"github.com/ykakade/tollgate/internal/telemetry"
 	"github.com/ykakade/tollgate/internal/usage"
@@ -97,6 +99,14 @@ type Server struct {
 	metrics       *telemetry.Metrics
 	tracer        trace.Tracer
 	propagator    propagation.TextMapPropagator
+
+	// derive and sticky are the session settings (ADR 0027 and ADR 0028).
+	derive, sticky bool
+	warnRatio      float64
+	// cache is the exact response cache of the routes that turn it on.
+	cache *respcache.Cache
+	// breakerKeys holds the breaker key of each target, for Breakers.
+	breakerKeys []router.Key
 }
 
 type routeKey struct {
@@ -110,6 +120,9 @@ type route struct {
 	// targets that support /v1/messages/count_tokens.
 	all, count targetList
 	timeouts   relay.Timeouts
+	// cacheTTL is the lifetime of a cached response, or 0 if the route
+	// does not use the response cache.
+	cacheTTL time.Duration
 }
 
 // targetList is an ordered list of targets and their breaker keys.
@@ -131,6 +144,9 @@ type target struct {
 	kind    string
 	adapter provider.Adapter
 	key     router.Key
+	// cacheTTL is the prompt cache lifetime of the provider, and so the
+	// lifetime of a sticky routing entry for the target.
+	cacheTTL time.Duration
 }
 
 // name returns "provider/model" for messages.
@@ -175,6 +191,10 @@ func New(opts Options) (*Server, error) {
 		metrics:       opts.Metrics,
 		tracer:        opts.Tracer,
 		propagator:    propagation.TraceContext{},
+		derive:        cfg.Sessions.DeriveOn(),
+		sticky:        cfg.Sessions.StickyOn(),
+		warnRatio:     cfg.Sessions.WarnRatio,
+		cache:         respcache.New(int64(cfg.ResponseCache.MaxBytes), int64(cfg.ResponseCache.MaxEntryBytes)),
 	}
 	if s.metrics == nil {
 		s.metrics = telemetry.NewMetrics()
@@ -220,6 +240,9 @@ func New(opts Options) (*Server, error) {
 				Total:      r.Timeouts.Total.Std(),
 			},
 		}
+		if r.ResponseCache.Enabled {
+			rt.cacheTTL = r.ResponseCache.TTL.Std()
+		}
 		for _, tc := range r.Targets {
 			adapter, ok := opts.Adapters[tc.Provider]
 			if !ok {
@@ -227,10 +250,11 @@ func New(opts Options) (*Server, error) {
 			}
 			p := cfg.Providers[tc.Provider]
 			t := &target{
-				Target:  tc,
-				kind:    p.Kind,
-				adapter: adapter,
-				key:     router.Key{Provider: tc.Provider, Model: tc.Model, Region: p.Region},
+				Target:   tc,
+				kind:     p.Kind,
+				adapter:  adapter,
+				key:      router.Key{Provider: tc.Provider, Model: tc.Model, Region: p.Region},
+				cacheTTL: p.CacheTTL.Std(),
 			}
 			rt.all.add(t)
 			if p.Kind != config.KindVertex {
@@ -244,15 +268,26 @@ func New(opts Options) (*Server, error) {
 		for _, m := range t.Models {
 			models[m] = true
 		}
-		s.tenants[t.ID] = &tenantPolicy{models: models, limits: t.Limits, budgets: t.Budgets}
+		tp := &tenantPolicy{models: models, limits: t.Limits, budgets: t.Budgets}
+		if t.Redact.On() {
+			patterns := make([]redact.Pattern, len(t.Redact.Patterns))
+			for i, p := range t.Redact.Patterns {
+				patterns[i] = redact.Pattern{Name: p.Name, Regex: p.Regex}
+			}
+			if tp.redactor, err = redact.New(t.Redact.Kinds, patterns); err != nil {
+				return nil, fmt.Errorf("tenant %s: redact: %w", t.ID, err)
+			}
+		}
+		s.tenants[t.ID] = tp
 	}
-	s.metrics.WatchBreakers(s.breakerStates(cfg))
+	s.breakerKeys = breakerKeys(cfg)
+	s.metrics.WatchBreakers(s.Breakers)
 	return s, nil
 }
 
-// breakerStates returns a function that gives the state of the breaker of
-// each target in the configuration, for the breaker_state metric.
-func (s *Server) breakerStates(cfg *config.Config) func() []telemetry.BreakerState {
+// breakerKeys returns the breaker key of each target in the
+// configuration, one time each, in the order of the routes.
+func breakerKeys(cfg *config.Config) []router.Key {
 	seen := make(map[router.Key]bool)
 	var keys []router.Key
 	for _, r := range cfg.Routes {
@@ -264,13 +299,17 @@ func (s *Server) breakerStates(cfg *config.Config) func() []telemetry.BreakerSta
 			}
 		}
 	}
-	return func() []telemetry.BreakerState {
-		out := make([]telemetry.BreakerState, len(keys))
-		for i, k := range keys {
-			out[i] = telemetry.BreakerState{Provider: k.Provider, Model: k.Model, Region: k.Region, State: int(s.router.State(k))}
-		}
-		return out
+	return keys
+}
+
+// Breakers returns the state of the breaker of each target in the
+// configuration, for the breaker_state metric and the admin API.
+func (s *Server) Breakers() []telemetry.BreakerState {
+	out := make([]telemetry.BreakerState, len(s.breakerKeys))
+	for i, k := range s.breakerKeys {
+		out[i] = telemetry.BreakerState{Provider: k.Provider, Model: k.Model, Region: k.Region, State: int(s.router.State(k))}
 	}
+	return out
 }
 
 // AdapterOptions are the options of NewAdapters.

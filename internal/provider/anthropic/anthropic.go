@@ -95,6 +95,10 @@ type StreamMeter struct {
 	seen   bool
 	model  string
 	err    error
+	// track is true if the meter counts the bytes of the output deltas,
+	// and outBytes is that count.
+	track    bool
+	outBytes int64
 }
 
 // NewStreamMeter returns a new StreamMeter.
@@ -148,7 +152,35 @@ func (m *StreamMeter) event(e sse.Event) {
 			m.u.merge(v.Usage)
 			m.seen = true
 		}
+	case "content_block_delta":
+		if !m.track {
+			return
+		}
+		var v struct {
+			Delta struct {
+				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
+				PartialJSON string `json:"partial_json"`
+			} `json:"delta"`
+		}
+		if json.Unmarshal(e.Data, &v) == nil {
+			m.outBytes += int64(len(v.Delta.Text) + len(v.Delta.Thinking) + len(v.Delta.PartialJSON))
+		}
 	}
+}
+
+// TrackOutput makes the meter count the output of the stream, for Running.
+// Call it before the first Write.
+func (m *StreamMeter) TrackOutput() { m.track = true }
+
+// Running returns the usage of the stream so far. The output tokens are
+// the larger of the reported count and an estimate from the bytes of the
+// output deltas, with the ratio of provider.BytesPerToken. The bool is true
+// if the message_start event gave the input usage.
+func (m *StreamMeter) Running() (provider.Usage, bool) {
+	u := m.u.value()
+	u.OutputTokens = max(u.OutputTokens, provider.TokensForBytes(m.outBytes))
+	return u, m.seen
 }
 
 // Usage implements provider.Meter.

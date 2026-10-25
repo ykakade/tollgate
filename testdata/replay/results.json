@@ -1,0 +1,80 @@
+[
+	{
+		"scenario": "no outage",
+		"sticky": true,
+		"requests": 40,
+		"attempts": 40,
+		"target_switches": 0,
+		"input_tokens": 1243,
+		"cache_read_tokens": 1115782,
+		"cache_write_tokens": 57349,
+		"output_tokens": 240,
+		"cost_micro_usd": 259856,
+		"cache_loss_micro_usd": 0
+	},
+	{
+		"scenario": "no outage",
+		"sticky": false,
+		"requests": 40,
+		"attempts": 40,
+		"target_switches": 0,
+		"input_tokens": 1243,
+		"cache_read_tokens": 1115782,
+		"cache_write_tokens": 57349,
+		"output_tokens": 240,
+		"cost_micro_usd": 259856,
+		"cache_loss_micro_usd": 0
+	},
+	{
+		"scenario": "100 s outage",
+		"sticky": true,
+		"requests": 40,
+		"attempts": 41,
+		"target_switches": 1,
+		"input_tokens": 1243,
+		"cache_read_tokens": 1101462,
+		"cache_write_tokens": 71669,
+		"output_tokens": 240,
+		"cost_micro_usd": 294224,
+		"cache_loss_micro_usd": 36238
+	},
+	{
+		"scenario": "100 s outage",
+		"sticky": false,
+		"requests": 40,
+		"attempts": 45,
+		"target_switches": 2,
+		"input_tokens": 1243,
+		"cache_read_tokens": 1095148,
+		"cache_write_tokens": 77983,
+		"output_tokens": 240,
+		"cost_micro_usd": 309377,
+		"cache_loss_micro_usd": 53885
+	},
+	{
+		"scenario": "6 min outage",
+		"sticky": true,
+		"requests": 40,
+		"attempts": 41,
+		"target_switches": 1,
+		"input_tokens": 1243,
+		"cache_read_tokens": 1101462,
+		"cache_write_tokens": 71669,
+		"output_tokens": 240,
+		"cost_micro_usd": 294224,
+		"cache_loss_micro_usd": 36238
+	},
+	{
+		"scenario": "6 min outage",
+		"sticky": false,
+		"requests": 40,
+		"attempts": 58,
+		"target_switches": 2,
+		"input_tokens": 1243,
+		"cache_read_tokens": 1061422,
+		"cache_write_tokens": 111709,
+		"output_tokens": 240,
+		"cost_micro_usd": 390320,
+		"cache_loss_micro_usd": 135931
+	}
+]

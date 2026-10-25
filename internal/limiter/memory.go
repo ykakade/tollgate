@@ -83,7 +83,11 @@ func (m *Memory) Admit(_ context.Context, r *Request) (Decision, error) {
 			m.add(b.Key, b.Amount, b.TTL, now)
 		}
 	}
-	return decide(r, c, idx, n, elapsed), nil
+	d := decide(r, c, idx, n, elapsed)
+	if r.Sticky != "" {
+		d.Sticky = m.get(r.Sticky, now)
+	}
+	return d, nil
 }
 
 // Settle implements Store.
@@ -98,6 +102,9 @@ func (m *Memory) Settle(_ context.Context, s *Settlement) error {
 	}
 	for _, a := range s.Budgets {
 		m.add(a.Key, a.Delta, a.TTL, now)
+	}
+	if e := s.Sticky; e != nil {
+		m.items[e.Key] = item{v: e.Value, expires: now.Add(e.TTL)}
 	}
 	return nil
 }

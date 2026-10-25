@@ -141,3 +141,32 @@ func TestPlanBudgetExhaustedFreesTheProbe(t *testing.T) {
 		t.Errorf("Allow(B) = %v, want the test attempt", why)
 	}
 }
+
+func TestPlanFrom(t *testing.T) {
+	keys := []Key{keyA, keyB, keyC}
+	for _, tt := range []struct {
+		first int
+		tried []int
+	}{
+		{0, []int{0, 1, 2}},
+		{1, []int{1, 0, 2}},
+		{2, []int{2, 0, 1}},
+		{-1, []int{0, 1, 2}},
+		{3, []int{0, 1, 2}},
+	} {
+		r := New(Settings{FailureRatio: 0.5, MinRequests: 100, OpenFor: time.Minute, BudgetRatio: 1})
+		got, stop := walk(t, r.PlanFrom(keys, 3, tt.first), NextTarget, NextTarget, NextTarget)
+		if !equal(got, tt.tried) || stop != MaxAttempts {
+			t.Errorf("PlanFrom(first %d) tried %v (stop %v), want %v", tt.first, got, stop, tt.tried)
+		}
+	}
+	// A blocked sticky target is skipped, and the next targets keep their
+	// order.
+	r := New(Settings{FailureRatio: 0.5, MinRequests: 100, OpenFor: time.Minute, BudgetRatio: 1})
+	r.CoolDown(keyC, time.Minute)
+	p := r.PlanFrom(keys, 3, 2)
+	got, _ := walk(t, p, Done)
+	if !equal(got, []int{0}) || len(p.Skipped()) != 1 || p.Skipped()[0].Index != 2 {
+		t.Errorf("tried %v, skipped %+v, want [0] and a skip of 2", got, p.Skipped())
+	}
+}

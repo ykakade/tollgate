@@ -189,6 +189,29 @@ func storeSuite(t *testing.T, newStore func(t *testing.T) Store) {
 		}
 	})
 
+	t.Run("sticky entry", func(t *testing.T) {
+		s := newStore(t)
+		k := prefix()
+		sticky := k + ":sticky"
+		if d := mustAdmit(t, s, &Request{Now: at(1), Sticky: sticky}); !d.Allowed || d.Sticky != 0 {
+			t.Fatalf("first decision = %+v, want allowed with no sticky value", d)
+		}
+		mustSettle(t, s, &Settlement{Now: at(1), Sticky: &Entry{Key: sticky, Value: 1<<40 + 3, TTL: time.Minute}})
+		d := mustAdmit(t, s, &Request{Now: at(2), Rates: []Rate{{Key: k, Limit: 5, Cost: 1}}, Budgets: []Budget{{Key: k + ":b", Limit: 10, Amount: 1, Hard: true, TTL: time.Hour}}, Sticky: sticky})
+		if !d.Allowed || d.Sticky != 1<<40+3 || len(d.Spend) != 1 {
+			t.Errorf("decision = %+v, want the sticky value %d", d, int64(1<<40+3))
+		}
+		// A denied request also reads the entry.
+		d = mustAdmit(t, s, &Request{Now: at(3), Budgets: []Budget{{Key: k + ":b", Limit: 1, Amount: 5, Hard: true, TTL: time.Hour}}, Sticky: sticky})
+		if d.Allowed || d.Sticky != 1<<40+3 {
+			t.Errorf("denied decision = %+v, want the sticky value", d)
+		}
+		mustSettle(t, s, &Settlement{Now: at(3), Budgets: []Adjust{{Key: k + ":b", Delta: 2, TTL: time.Hour}}, Sticky: &Entry{Key: sticky, Value: 7, TTL: time.Minute}})
+		if d := mustAdmit(t, s, &Request{Now: at(4), Sticky: sticky}); d.Sticky != 7 {
+			t.Errorf("Sticky = %d after a new value, want 7", d.Sticky)
+		}
+	})
+
 	t.Run("ping", func(t *testing.T) {
 		if err := newStore(t).Ping(t.Context()); err != nil {
 			t.Error(err)

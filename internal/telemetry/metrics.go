@@ -69,6 +69,10 @@ type Metrics struct {
 	limitRejections *prometheus.CounterVec
 	activeStreams   prometheus.Gauge
 	storeErrors     *prometheus.CounterVec
+	cacheLoss       *prometheus.CounterVec
+	switches        *prometheus.CounterVec
+	budgetWarnings  prometheus.Counter
+	budgetCutoffs   *prometheus.CounterVec
 
 	breakers *breakerCollector
 	dropped  *droppedCollector
@@ -136,6 +140,22 @@ func NewMetrics() *Metrics {
 			Namespace: Namespace, Name: "store_errors_total",
 			Help: "Failed calls to the limit store, by store and operation.",
 		}, []string{"store", "op"}),
+		cacheLoss: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: Namespace, Name: "cache_loss_micro_usd_total",
+			Help: "Upper bound of the extra cost of requests that went to a different target than the previous request of their session, in micro-USD.",
+		}, labels),
+		switches: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: Namespace, Name: "session_target_switches_total",
+			Help: "Requests that went to a different target than the previous request of their session.",
+		}, labels),
+		budgetWarnings: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: Namespace, Name: "session_budget_warnings_total",
+			Help: "Requests that took the spend of their session to sessions.warn_ratio of the session budget.",
+		}),
+		budgetCutoffs: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: Namespace, Name: "budget_cutoffs_total",
+			Help: "Streams that Tollgate stopped because a hard budget had no money left, by budget window.",
+		}, []string{"window"}),
 		breakers: newBreakerCollector(),
 		dropped:  newDroppedCollector(),
 	}
@@ -145,7 +165,8 @@ func NewMetrics() *Metrics {
 	m.reg.MustRegister(
 		m.requests, m.duration, m.ttft, m.itl, m.overhead, m.tokens, m.cost,
 		m.fallbacks, m.retries, m.retryExhausted, m.limitRejections,
-		m.activeStreams, m.storeErrors, m.breakers, m.dropped,
+		m.activeStreams, m.storeErrors, m.cacheLoss, m.switches, m.budgetWarnings, m.budgetCutoffs,
+		m.breakers, m.dropped,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -181,6 +202,11 @@ type Request struct {
 	CacheReadTokens  int64
 	CacheWriteTokens int64
 	CostMicroUSD     int64
+	// Switched is true if the request went to a different target than the
+	// previous request of its session, and CacheLossMicroUSD is the upper
+	// bound of the extra cost.
+	Switched          bool
+	CacheLossMicroUSD int64
 }
 
 // ObserveRequest records a finished request.
@@ -216,7 +242,19 @@ func (m *Metrics) ObserveRequest(r Request) {
 	if r.CostMicroUSD > 0 {
 		m.cost.WithLabelValues(route, prov).Add(float64(r.CostMicroUSD))
 	}
+	if r.Switched {
+		m.switches.WithLabelValues(route, prov).Inc()
+		m.cacheLoss.WithLabelValues(route, prov).Add(float64(r.CacheLossMicroUSD))
+	}
 }
+
+// SessionBudgetWarning records a request that took the spend of its
+// session to the warning ratio of the session budget.
+func (m *Metrics) SessionBudgetWarning() { m.budgetWarnings.Inc() }
+
+// BudgetCutoff records a stream that Tollgate stopped because a hard
+// budget of the window had no money left.
+func (m *Metrics) BudgetCutoff(window string) { m.budgetCutoffs.WithLabelValues(window).Inc() }
 
 // Retry records an extra attempt after a failed attempt to provider. If
 // the extra attempt goes to a different target, Retry also records a

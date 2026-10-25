@@ -3,6 +3,7 @@
 GO      ?= go
 BIN     ?= bin
 SDK_DIR := test/sdk
+NPM     ?= npm
 
 GOVULNCHECK_VERSION ?= v1.9.0
 
@@ -110,3 +111,20 @@ check: fmt-check vet tidy-check build test test-integration lint ## Run all loca
 .PHONY: clean
 clean: ## Remove build output.
 	rm -rf $(BIN) coverage.out
+
+.PHONY: web
+web: ## Build the dashboard assets that the Go binary embeds.
+	cd web && $(NPM) ci --ignore-scripts && $(NPM) run build
+
+.PHONY: web-check
+web-check: web ## Fail if the committed dashboard assets differ from the source.
+	git diff --exit-code -- web/dist
+	@test -z "$$(git ls-files --others --exclude-standard web/dist)" || { echo "Commit the new files in web/dist."; exit 1; }
+
+.PHONY: replay
+replay: ## Write the sticky routing replay results and chart again.
+	$(GO) test ./internal/server -run '^TestStickyReplay$$' -count=1 -update-replay
+
+.PHONY: dashboard-demo
+dashboard-demo: build ## Start the dashboard demo with synthetic usage. Stop with Ctrl-C.
+	node web/scripts/demo.mjs

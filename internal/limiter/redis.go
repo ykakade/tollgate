@@ -86,11 +86,16 @@ func (s *Redis) Admit(ctx context.Context, r *Request) (Decision, error) {
 		keys = append(keys, b.Key)
 		args = append(args, b.Limit, b.Amount, hard, ttlMs(b.TTL))
 	}
+	want := 1 + 2*len(r.Rates) + len(r.Budgets)
+	if r.Sticky != "" {
+		keys = append(keys, r.Sticky)
+		want++
+	}
 	vals, err := s.admit.Run(ctx, s.client, keys, args...).Int64Slice()
 	if err != nil {
 		return Decision{}, fmt.Errorf("redis admit: %w", err)
 	}
-	if len(vals) != 1+2*len(r.Rates)+len(r.Budgets) {
+	if len(vals) != want {
 		return Decision{}, fmt.Errorf("redis admit: the script returned %d values", len(vals))
 	}
 	c := counts{
@@ -104,13 +109,17 @@ func (s *Redis) Admit(ctx context.Context, r *Request) (Decision, error) {
 	for j := range r.Budgets {
 		c.spend[j] = vals[1+2*len(r.Rates)+j]
 	}
-	return decide(r, c, int(vals[0]), n, elapsed), nil
+	d := decide(r, c, int(vals[0]), n, elapsed)
+	if r.Sticky != "" {
+		d.Sticky = vals[len(vals)-1]
+	}
+	return d, nil
 }
 
 // Settle implements Store.
 func (s *Redis) Settle(ctx context.Context, st *Settlement) error {
-	var keys []string
-	var args []any
+	keys := []string{}
+	args := []any{0}
 	if n, _ := minute(st.Now); st.Minute >= n-1 {
 		for _, a := range st.Rates {
 			if a.Delta != 0 {
@@ -124,6 +133,11 @@ func (s *Redis) Settle(ctx context.Context, st *Settlement) error {
 			keys = append(keys, a.Key)
 			args = append(args, a.Delta, ttlMs(a.TTL))
 		}
+	}
+	args[0] = len(keys)
+	if e := st.Sticky; e != nil {
+		keys = append(keys, e.Key)
+		args = append(args, e.Value, ttlMs(e.TTL))
 	}
 	if len(keys) == 0 {
 		return nil

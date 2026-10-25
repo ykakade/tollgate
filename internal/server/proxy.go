@@ -19,13 +19,14 @@ import (
 
 	"github.com/ykakade/tollgate/internal/apierror"
 	"github.com/ykakade/tollgate/internal/auth"
-	"github.com/ykakade/tollgate/internal/budget"
 	"github.com/ykakade/tollgate/internal/config"
 	"github.com/ykakade/tollgate/internal/preflight"
 	"github.com/ykakade/tollgate/internal/provider"
 	"github.com/ykakade/tollgate/internal/provider/anthropic"
 	"github.com/ykakade/tollgate/internal/provider/openai"
+	"github.com/ykakade/tollgate/internal/redact"
 	"github.com/ykakade/tollgate/internal/relay"
+	"github.com/ykakade/tollgate/internal/respcache"
 	"github.com/ykakade/tollgate/internal/telemetry"
 )
 
@@ -87,6 +88,24 @@ type exchange struct {
 	err        error
 
 	session string
+	// sessionDerived is true if the session ID is a hash of the prompt
+	// prefix (ADR 0027).
+	sessionDerived bool
+	// prevTarget is the index of the target of the previous request of
+	// the session, or -1. switched is true if the request went to a
+	// different target, and cacheLoss is then the upper bound of the extra
+	// cost (ADR 0028).
+	prevTarget int
+	switched   bool
+	cacheLoss  int64
+	// cutoff is true if Tollgate stopped the stream because a hard budget
+	// had no money left (ADR 0029).
+	cutoff bool
+	// cache is "hit", "miss" or "" (bypass) for the response cache.
+	cache string
+	// mapping holds the placeholders of the masked values of the request,
+	// or is nil (ADR 0031).
+	mapping *redact.Mapping
 	// cost is the cost of the request in micro-USD.
 	cost int64
 	// limitHeader holds the rate limit headers of the response.
@@ -102,7 +121,7 @@ type exchange struct {
 
 // begin starts the exchange and sets the x-request-id header.
 func (s *Server) begin(w http.ResponseWriter, r *http.Request, api config.API) *exchange {
-	x := &exchange{w: w, r: r, api: api, id: rand.Text(), start: time.Now(), ttft: -1, itl: -1, served: -1, span: trace.SpanFromContext(r.Context())}
+	x := &exchange{w: w, r: r, api: api, id: rand.Text(), start: time.Now(), ttft: -1, itl: -1, served: -1, prevTarget: -1, span: trace.SpanFromContext(r.Context())}
 	w.Header().Set("X-Request-Id", x.id)
 	return x
 }
@@ -128,10 +147,19 @@ func (s *Server) finish(ctx context.Context, x *exchange) {
 		args = append(args, "tenant_id", x.identity.TenantID, "key_id", x.identity.KeyID)
 	}
 	if x.session != "" {
-		args = append(args, "session_id", x.session)
+		args = append(args, "session_id", x.session, "session_derived", x.sessionDerived)
 	}
 	if x.routeModel != "" {
-		args = append(args, "api", string(x.api), "route_model", x.routeModel, "stream", x.stream)
+		args = append(args, "api", string(x.api), "route_model", x.routeModel, "stream", x.stream, "cache", x.cacheLabel())
+	}
+	if x.mapping.Len() > 0 {
+		args = append(args, "redacted", x.mapping.Len())
+	}
+	if x.switched {
+		args = append(args, "target_switched", true, "cache_loss_micro_usd", x.cacheLoss)
+	}
+	if x.cutoff {
+		args = append(args, "budget_cutoff", true)
 	}
 	if x.attempts > 0 {
 		args = append(args,
@@ -180,20 +208,22 @@ func (s *Server) observe(x *exchange) {
 		overhead = x.overhead
 	}
 	s.metrics.ObserveRequest(telemetry.Request{
-		Route:            x.route,
-		Provider:         x.provider,
-		Status:           x.status,
-		Cache:            "bypass",
-		Duration:         time.Since(x.start),
-		TTFT:             x.ttft,
-		ITL:              x.itl,
-		Overhead:         overhead,
-		Usage:            x.usageKnown,
-		InputTokens:      x.usage.InputTokens,
-		OutputTokens:     x.usage.OutputTokens,
-		CacheReadTokens:  x.usage.CacheReadTokens,
-		CacheWriteTokens: x.usage.CacheWriteTokens,
-		CostMicroUSD:     x.cost,
+		Route:             x.route,
+		Provider:          x.provider,
+		Status:            x.status,
+		Cache:             x.cacheLabel(),
+		Duration:          time.Since(x.start),
+		TTFT:              x.ttft,
+		ITL:               x.itl,
+		Overhead:          overhead,
+		Usage:             x.usageKnown,
+		InputTokens:       x.usage.InputTokens,
+		OutputTokens:      x.usage.OutputTokens,
+		CacheReadTokens:   x.usage.CacheReadTokens,
+		CacheWriteTokens:  x.usage.CacheWriteTokens,
+		CostMicroUSD:      x.cost,
+		Switched:          x.switched,
+		CacheLossMicroUSD: x.cacheLoss,
 	})
 
 	sp := x.span
@@ -202,7 +232,7 @@ func (s *Server) observe(x *exchange) {
 	}
 	attrs := []attribute.KeyValue{
 		telemetry.AttrRequestID.String(x.id),
-		telemetry.AttrCache.String("bypass"),
+		telemetry.AttrCache.String(x.cacheLabel()),
 	}
 	if x.status > 0 {
 		attrs = append(attrs, semconv.HTTPResponseStatusCode(x.status))
@@ -317,6 +347,27 @@ func (s *Server) serveProxy(ctx context.Context, x *exchange, ep endpoint) {
 	}
 	defer s.settle(ctx, x, adm)
 	defer x.flush()
+	f.cut = s.roomOf(x, adm)
+	f.prices = adm.prices
+	f.first = -1
+	if adm.sticky != "" {
+		x.prevTarget = stickyIndex(adm.decision.Sticky, f.list)
+		if s.sticky {
+			f.first = x.prevTarget
+		}
+	}
+	if f.rt.cacheTTL > 0 && ep.metered {
+		x.cache = "miss"
+		key := respcache.NewKey(x.identity.TenantID, string(ep.api), f.rt.model, x.r.Header, f.clientBody)
+		_, span := s.tracer.Start(ctx, "cache")
+		e, ok := s.cache.Get(key, s.now())
+		span.End()
+		if ok {
+			s.serveCached(x, e)
+			return
+		}
+		f.cacheKey = &key
+	}
 	s.forward(ctx, x, f)
 }
 
@@ -364,12 +415,29 @@ func (s *Server) preflight(x *exchange, ep endpoint) (*flow, bool) {
 		return nil, false
 	}
 	x.routeModel, x.stream = pre.Model, pre.Stream
-	if x.session = r.Header.Get("X-Tollgate-Session"); x.session != "" && !budget.ValidSession(x.session) {
-		x.session = ""
+	if !s.setSession(x, pre) {
 		x.fail(http.StatusBadRequest, "The x-tollgate-session header is not valid. Use 1 to 128 visible ASCII characters, with no spaces.", 0)
 		return nil, false
 	}
-	if !s.tenants[x.identity.TenantID].models[pre.Model] {
+	tp := s.tenants[x.identity.TenantID]
+	clientBody := body
+	if tp.redactor != nil {
+		masked, m, err := tp.redactor.Mask(body)
+		if err != nil {
+			x.err = err
+			x.fail(http.StatusBadRequest, "Tollgate cannot redact the request body. Check the JSON strings of the request.", 0)
+			return nil, false
+		}
+		if m.Len() > 0 {
+			if pre, err = preflight.Decode(masked); err != nil {
+				x.err = err
+				x.fail(http.StatusBadRequest, decodeMessage(err), 0)
+				return nil, false
+			}
+			x.mapping = m
+		}
+	}
+	if !tp.models[pre.Model] {
 		x.fail(http.StatusForbidden, fmt.Sprintf("The key cannot use the model %q. Use a model that the configuration of the tenant allows.", pre.Model), 0)
 		return nil, false
 	}
@@ -389,7 +457,7 @@ func (s *Server) preflight(x *exchange, ep endpoint) (*flow, bool) {
 		x.fail(http.StatusNotFound, fmt.Sprintf("No target of the model %q supports %s. Add a target with a provider of the kind anthropic.", pre.Model, ep.path), 0)
 		return nil, false
 	}
-	f := &flow{ep: ep, rt: rt, list: list, pre: pre, bodies: make([][]byte, len(list.targets))}
+	f := &flow{ep: ep, rt: rt, list: list, pre: pre, clientBody: clientBody, bodies: make([][]byte, len(list.targets))}
 	// The size of the first body gives the input token estimate of all
 	// targets.
 	if _, err := f.body(0); err != nil {
@@ -409,6 +477,9 @@ type responseStartWriter struct {
 	header  http.Header
 	status  int
 	started bool
+	// capture, if not nil, keeps a copy of the body for the response
+	// cache.
+	capture *captureWriter
 }
 
 func (w *responseStartWriter) commit() {
@@ -421,6 +492,11 @@ func (w *responseStartWriter) commit() {
 		h.Set("X-Tollgate-Model", w.x.providerModel)
 		h.Set("X-Tollgate-Attempts", strconv.Itoa(w.x.attempts))
 		h.Set("X-Tollgate-Overhead-Ms", strconv.FormatFloat(float64(w.x.overhead)/float64(time.Millisecond), 'f', 3, 64))
+		h.Set("X-Tollgate-Cache", w.x.cacheLabel())
+		if w.x.mapping.Len() > 0 {
+			// The restored values change the length of the body.
+			h.Del("Content-Length")
+		}
 		for k, v := range w.x.limitHeader {
 			h[k] = v
 		}
@@ -432,7 +508,10 @@ func (w *responseStartWriter) commit() {
 
 func (w *responseStartWriter) Write(p []byte) (int, error) {
 	w.commit()
-	return w.ResponseWriter.Write(p)
+	if w.capture != nil {
+		w.capture.add(p)
+	}
+	return w.ResponseWriter.Write(p) //nolint:gosec // The body is a provider response, sent without changes (ADR 0009).
 }
 
 func (w *responseStartWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
@@ -466,11 +545,16 @@ type boundaryMeter interface {
 // error event (ADR 0007). If the stream stopped inside an event, it first
 // ends that event, so the error event is a separate event.
 func (s *Server) writeStreamError(x *exchange, t *target, timeouts relay.Timeouts, meter provider.Meter, cause error) {
+	s.writeStreamEvent(x, meter, errorMessage(t.Target, timeouts, cause, true))
+}
+
+// writeStreamEvent ends a stream with an error event with the message.
+func (s *Server) writeStreamEvent(x *exchange, meter provider.Meter, message string) {
 	var event []byte
-	if bm, ok := meter.(boundaryMeter); ok && !bm.AtBoundary() {
+	if bm, ok := innerMeter(meter).(boundaryMeter); ok && !bm.AtBoundary() {
 		event = append(event, "\n\n"...)
 	}
-	event = append(event, apierror.StreamEvent(x.api, errorMessage(t.Target, timeouts, cause, true))...)
+	event = append(event, apierror.StreamEvent(x.api, message)...)
 	if _, err := x.w.Write(event); err == nil { //nolint:gosec // An event stream is not HTML, and the message is JSON-encoded.
 		_ = http.NewResponseController(x.w).Flush()
 	}

@@ -68,6 +68,10 @@ type StreamMeter struct {
 	seen   bool
 	model  string
 	err    error
+	// track is true if the meter counts the bytes of the output deltas,
+	// and outBytes is that count.
+	track    bool
+	outBytes int64
 }
 
 // NewStreamMeter returns a new StreamMeter.
@@ -90,7 +94,10 @@ func (m *StreamMeter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-var usageKey = []byte(`"usage"`)
+var (
+	usageKey = []byte(`"usage"`)
+	deltaKey = []byte(`"delta"`)
+)
 
 var done = []byte("[DONE]")
 
@@ -101,6 +108,29 @@ func (m *StreamMeter) event(e sse.Event) {
 	if !bytes.Equal(e.Data, done) && !jsontext.Value(e.Data).IsValid() {
 		m.err = fmt.Errorf("%w: the data of an event is not JSON", provider.ErrMalformed)
 		return
+	}
+	if m.track && bytes.Contains(e.Data, deltaKey) {
+		var v struct {
+			Choices []struct {
+				Delta struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+					ToolCalls        []struct {
+						Function struct {
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal(e.Data, &v) == nil {
+			for _, c := range v.Choices {
+				m.outBytes += int64(len(c.Delta.Content) + len(c.Delta.ReasoningContent))
+				for _, tc := range c.Delta.ToolCalls {
+					m.outBytes += int64(len(tc.Function.Arguments))
+				}
+			}
+		}
 	}
 	// Most chunks have no usage or "usage":null. Do not decode a chunk that
 	// cannot have usage.
@@ -116,6 +146,20 @@ func (m *StreamMeter) event(e sse.Event) {
 		m.seen = true
 		m.model = v.Model
 	}
+}
+
+// TrackOutput makes the meter count the output of the stream, for Running.
+// Call it before the first Write.
+func (m *StreamMeter) TrackOutput() { m.track = true }
+
+// Running returns the usage of the stream so far. Before the usage chunk,
+// the output tokens are an estimate from the bytes of the output deltas,
+// with the ratio of provider.BytesPerToken. The bool is true if the usage
+// chunk arrived, so the input usage is known.
+func (m *StreamMeter) Running() (provider.Usage, bool) {
+	u := m.u
+	u.OutputTokens = max(u.OutputTokens, provider.TokensForBytes(m.outBytes))
+	return u, m.seen
 }
 
 // Model returns the model that the usage chunk names, or "".

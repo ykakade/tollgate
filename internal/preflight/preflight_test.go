@@ -167,6 +167,9 @@ func FuzzPreflightDecode(f *testing.F) {
 		if err != nil {
 			return
 		}
+		if h := r.PrefixHash(); h != "" && len(h) != 32 {
+			t.Fatalf("PrefixHash = %q, want 32 hex digits", h)
+		}
 		out, err := r.Rewrite("new-model", true)
 		if err != nil {
 			t.Fatalf("Rewrite: %v", err)
@@ -207,4 +210,45 @@ func FuzzPreflightDecode(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestPrefixHash(t *testing.T) {
+	hash := func(body string) string {
+		t.Helper()
+		r, err := Decode([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.PrefixHash()
+	}
+	turn1 := `{"model":"m","system":"Be brief.","messages":[{"role":"user","content":"Fix the bug."}]}`
+	turn2 := `{"model":"m2","max_tokens":9,"system":"Be brief.","messages":[{"role":"user","content":"Fix the bug."},{"role":"assistant","content":"Done."},{"role":"user","content":"Thanks."}]}`
+	h := hash(turn1)
+	if len(h) != 32 || h != hash(turn2) {
+		t.Errorf("two turns of one session have the hashes %q and %q", h, hash(turn2))
+	}
+	for _, other := range []string{
+		`{"model":"m","system":"Be long.","messages":[{"role":"user","content":"Fix the bug."}]}`,
+		`{"model":"m","system":"Be brief.","messages":[{"role":"user","content":"Fix the test."}]}`,
+		`{"model":"m","messages":[{"role":"user","content":"Fix the bug."}]}`,
+	} {
+		if hash(other) == h {
+			t.Errorf("a different session has the same hash: %s", other)
+		}
+	}
+	openai1 := `{"model":"g","messages":[{"role":"system","content":"S"},{"role":"user","content":"U"}]}`
+	openai2 := `{"model":"g","messages":[{"role":"system","content":"S"},{"role":"user","content":"U"},{"role":"assistant","content":"A"}]}`
+	if hash(openai1) == "" || hash(openai1) != hash(openai2) {
+		t.Errorf("OpenAI turns have the hashes %q and %q", hash(openai1), hash(openai2))
+	}
+	for _, none := range []string{
+		`{"model":"m"}`,
+		`{"model":"m","messages":[]}`,
+		`{"model":"m","messages":[{"role":"system","content":"S"}]}`,
+		`{"model":"m","messages":"text"}`,
+	} {
+		if got := hash(none); got != "" {
+			t.Errorf("PrefixHash(%s) = %q, want empty", none, got)
+		}
+	}
 }

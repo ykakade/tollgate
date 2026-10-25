@@ -7,7 +7,8 @@
 // request. See the fakeprovider package for the scenarios.
 //
 // The -first-token-delay and -token-interval flags make the replies as slow
-// as a real model, for demos and benchmarks.
+// as a real model, for demos and benchmarks. The -prompt-cache flag turns on
+// a simulated prompt cache, so the usage has cache read and write tokens.
 package main
 
 import (
@@ -50,14 +51,15 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	scenario := fs.String("scenario", "", "Failure `scenario` for all requests, for example status:529 or reset-after:5-tokens.")
 	firstDelay := fs.Duration("first-token-delay", 0, "Wait before the first body byte of each reply, for example 300ms.")
 	interval := fs.Duration("token-interval", 0, "Wait between two output tokens, for example 20ms.")
+	promptCache := fs.Duration("prompt-cache", 0, "Lifetime of a simulated prompt cache, for example 5m. 0 turns the cache off.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *firstDelay < 0 || *interval < 0 {
-		return errors.New("the -first-token-delay and -token-interval flags must not be negative")
+	if *firstDelay < 0 || *interval < 0 || *promptCache < 0 {
+		return errors.New("the -first-token-delay, -token-interval and -prompt-cache flags must not be negative")
 	}
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
-	fp := fakeprovider.New(fakeprovider.Config{Logger: logger, FirstTokenDelay: *firstDelay, TokenInterval: *interval})
+	fp := fakeprovider.New(fakeprovider.Config{Logger: logger, FirstTokenDelay: *firstDelay, TokenInterval: *interval, PromptCache: *promptCache})
 	if err := fp.SetScenario(*scenario); err != nil {
 		return fmt.Errorf("the -scenario flag: %w", err)
 	}

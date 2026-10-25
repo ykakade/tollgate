@@ -130,3 +130,27 @@ func TestMeterModel(t *testing.T) {
 		t.Errorf("body model = %q, want claude-y", got)
 	}
 }
+
+func TestStreamMeterRunning(t *testing.T) {
+	m := NewStreamMeter()
+	m.TrackOutput()
+	stream := "event: message_start\n" +
+		`data: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":10,"cache_read_input_tokens":90,"output_tokens":1}}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"0123456789"}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"a\":1}"}}` + "\n\n"
+	if _, err := m.Write([]byte(stream)); err != nil {
+		t.Fatal(err)
+	}
+	u, ok := m.Running()
+	if !ok || u.InputTokens != 10 || u.CacheReadTokens != 90 || u.OutputTokens != 5 {
+		t.Errorf("Running = %+v, %v; want input 10, cache read 90, output 5 (17 bytes / 4)", u, ok)
+	}
+	if _, err := m.Write([]byte("event: message_delta\n" + `data: {"type":"message_delta","usage":{"output_tokens":40}}` + "\n\n")); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := m.Running(); u.OutputTokens != 40 {
+		t.Errorf("Running output = %d after message_delta, want 40", u.OutputTokens)
+	}
+}

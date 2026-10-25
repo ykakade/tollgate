@@ -35,9 +35,14 @@ func (r openaiRequest) limit() int {
 }
 
 type openaiUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int                  `json:"prompt_tokens"`
+	CompletionTokens    int                  `json:"completion_tokens"`
+	TotalTokens         int                  `json:"total_tokens"`
+	PromptTokensDetails *openaiPromptDetails `json:"prompt_tokens_details,omitzero"`
+}
+
+type openaiPromptDetails struct {
+	CachedTokens int `json:"cached_tokens"`
 }
 
 type openaiMessage struct {
@@ -118,11 +123,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if cut {
 		finishReason = "length"
 	}
-	prompt := inputTokens(body)
+	// OpenAI counts cached tokens as part of prompt_tokens, and has no
+	// price for cache writes.
+	input, read, write := s.promptUsage(body)
+	prompt := input + read + write
 	usage := &openaiUsage{
 		PromptTokens:     prompt,
 		CompletionTokens: len(chunks),
 		TotalTokens:      prompt + len(chunks),
+	}
+	if s.cache != nil {
+		usage.PromptTokensDetails = &openaiPromptDetails{CachedTokens: read}
 	}
 	if sc.kind == kindNoUsage {
 		usage = nil

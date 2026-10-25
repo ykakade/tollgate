@@ -68,6 +68,9 @@ type Request struct {
 	Now     time.Time
 	Rates   []Rate
 	Budgets []Budget
+	// Sticky, if not empty, is the key of a sticky routing entry. Admit
+	// reads it into Decision.Sticky. It does not change it.
+	Sticky string
 }
 
 // RateState is the state of one rate limit after Admit.
@@ -106,6 +109,9 @@ type Decision struct {
 	// Local is true if a Failover store used its local store because the
 	// main store failed. Then no budget has a reservation.
 	Local bool
+	// Sticky is the value of the sticky routing entry of the request, or
+	// 0 if the request has none or the entry expired.
+	Sticky int64
 }
 
 // Adjust is one change of a counter.
@@ -130,6 +136,15 @@ type Settlement struct {
 	Budgets []Adjust
 	// Local is Decision.Local of the request.
 	Local bool
+	// Sticky, if not nil, sets a sticky routing entry.
+	Sticky *Entry
+}
+
+// Entry is a value with a lifetime.
+type Entry struct {
+	Key   string
+	Value int64
+	TTL   time.Duration
 }
 
 // Store holds the limit state.

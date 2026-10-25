@@ -28,6 +28,10 @@ All Tollgate metrics have the prefix `tollgate_`. The Go runtime metrics (`go_*`
 | `tollgate_limit_rejections_total` | counter | `kind` | Requests that a limit refused: `requests`, `tokens` or `budget`. |
 | `tollgate_active_streams` | gauge | none | Event streams that Tollgate sends to clients now. |
 | `tollgate_usage_events_dropped_total` | counter | `sink` | Usage events that Tollgate did not write, because the queue was full or the file failed. |
+| `tollgate_session_target_switches_total` | counter | `route`, `provider` | Requests that changed target from the previous request of their session. |
+| `tollgate_cache_loss_micro_usd_total` | counter | `route`, `provider` | Upper bound of extra input cost after a target switch. |
+| `tollgate_session_budget_warnings_total` | counter | none | Requests that crossed the configured session warning ratio. |
+| `tollgate_budget_cutoffs_total` | counter | `window` | Streams stopped by a hard budget. |
 | `tollgate_store_errors_total` | counter | `store`, `op` | Failed calls to Redis, by operation: `admit`, `settle` or `ping`. |
 
 The label values come from the configuration, so their number stays small:
@@ -88,7 +92,7 @@ The server span has these attributes, if the request has them:
 | `gen_ai.response.model` | The model that the provider named in its response. |
 | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | The tokens of the response. |
 | `tollgate.request_id` | The same ID as in the `x-request-id` header and the access log. |
-| `tollgate.tenant_id`, `tollgate.session_id` | The tenant and the `x-tollgate-session` header. |
+| `tollgate.tenant_id`, `tollgate.session_id` | The tenant and the explicit or derived session ID. |
 | `tollgate.attempts`, `tollgate.target` | The number of upstream attempts, and the target of the last attempt. |
 | `tollgate.cache` | `bypass` in this version. |
 | `tollgate.cost_micro_usd`, `tollgate.usage_estimated` | The cost, and `true` if the provider sent no usage. |
@@ -214,3 +218,5 @@ Result: The dashboard shows request rate, error rate, active streams, spend per 
 | The admin token and the profiles | [the admin tests](../internal/admin/admin_test.go). |
 
 The cost of tracing and of the metrics on the request path is not measured. The benchmarks of M5 will measure the overhead.
+
+The [embedded dashboard](admin-api.md) uses the admin API, with a bounded local usage index. See [agent features](agent-features.md) for cache reports and budget cutoffs.

@@ -11,19 +11,28 @@ One Go binary that controls cost, rate limits, and failover for the Anthropic an
 
 ## What Tollgate does
 
+- **Tracks agent sessions.** Session budgets, approximate stream cutoffs, sticky provider selection, cache cost reports, an opt-in response cache and personal data redaction. See [agent features](docs/agent-features.md).
+- **Includes a dashboard.** Overview, sessions, providers and keys, in light and dark mode, served by the same binary. See [admin API and dashboard](docs/admin-api.md).
 - **Recovers from provider failures.** Ordered targets, retries, a retry budget, and circuit breakers apply before the first byte. See [reliability](docs/reliability.md).
 - **Supports cloud and local targets.** Use Claude on Vertex AI or local Ollama models with the same API format.
 
 - **Controls cost.** Set a budget for each tenant, for each month and for each agent session. When a hard budget has no money left, Tollgate refuses the request with status 402. See [rate limits and budgets](docs/limits.md).
 - **Limits traffic.** Set limits for requests and tokens per minute. The limits stay correct when you run more than one Tollgate copy with Redis.
 - **Records the cost of each request.** Tollgate calculates the cost from a price table, and writes one usage event for each request to a JSONL file. A restart keeps the spend of the month.
-- **Does not change requests.** Anthropic `/v1/messages` and OpenAI `/v1/chat/completions` requests go through in their native format. Streams go to the client byte for byte.
+- **Uses native API formats.** Anthropic `/v1/messages` and OpenAI `/v1/chat/completions` retain their provider format. Without opt-in redaction or a budget cutoff, streams pass through byte for byte.
 - **Uses its own keys.** Clients send a Tollgate key. Tollgate stores only the hash of the key, and sends the provider key from the environment.
 - **Records the tokens of each request.** Tollgate reads the usage from each response, with cache tokens, and writes one JSON log line for each request.
 - **Stops slow providers.** Each route has a connect, first-token, idle and total timeout.
 - **Does not cut streams at shutdown.** On `SIGTERM`, Tollgate refuses new requests and lets open streams finish.
 - **Stops upstream requests that nobody reads.** If the client disconnects, Tollgate cancels the request to the provider.
 - **Shows what happens.** Prometheus metrics, OpenTelemetry traces with a span for each upstream attempt, and a Grafana dashboard. See [observability](docs/observability.md).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/dashboard-overview-dark.png">
+  <img alt="Tollgate dashboard with synthetic demo data" src="docs/assets/dashboard-overview-light.png">
+</picture>
+
+The screenshot uses synthetic demo data. Run `make dashboard-demo` to reproduce the demo.
 
 ## Build from source
 

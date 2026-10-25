@@ -114,6 +114,8 @@ type setup struct {
 	usage  Emitter
 	// upstreamURL, if not empty, replaces the URL of the upstream server.
 	upstreamURL string
+	// models, if not empty, replaces the models of the tenant.
+	models string
 }
 
 // newEnv starts a Tollgate server in front of upstream. Both providers point
@@ -141,6 +143,9 @@ func newEnv(t *testing.T, upstream http.Handler, s setup) *env {
 	}
 	if s.prices != "" {
 		s.top += "\npricing:\n  file: prices.yaml\n"
+	}
+	if s.models == "" {
+		s.models = "[claude-test, gpt-test]"
 	}
 	yaml := fmt.Sprintf(`version: 1
 server:
@@ -171,10 +176,10 @@ routes:
 tenants:
   - id: personal
     keys: [{id: laptop, hash: %s}]
-    models: [claude-test, gpt-test]
+    models: %s
 %s
 %s
-`, s.maxBody, s.drain, upURL, upURL, s.timeouts, s.timeouts, s.extraRoutes, auth.Hash(key), s.tenant, s.top)
+`, s.maxBody, s.drain, upURL, upURL, s.timeouts, s.timeouts, s.extraRoutes, auth.Hash(key), s.models, s.tenant, s.top)
 	vars := map[string]string{"A_KEY": anthropicProviderKey, "O_KEY": openaiProviderKey}
 	cfg, err := config.Parse("test.yaml", []byte(yaml), config.Env{
 		LookupEnv: func(k string) (string, bool) { v, ok := vars[k]; return v, ok },

@@ -48,6 +48,12 @@ func failureEnvWith(t *testing.T, api, kind, scenario, extra string, now func() 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The fallback tests send the same body again and again. Sticky routing
+	// would keep those requests on the fallback target, so it is off unless
+	// the test sets sessions.
+	if !strings.Contains(extra, "sessions:") {
+		extra += "\nsessions: {sticky: false}"
+	}
 	vertexFields := ""
 	if kind == config.KindVertex {
 		vertexFields = "\n    project: test-project\n    region: us-east5"

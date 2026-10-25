@@ -8,6 +8,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Derived session IDs, a warning at the session budget threshold, approximate hard-budget stream cutoffs, and spend projections.
+- Sticky routing with provider cache TTLs, target switch records, cache loss estimates, and the `tollgate report` command.
+- A bounded, opt-in exact response cache per route, scoped by tenant and original request bytes.
+- Tenant-level personal data redaction with built-in detectors, custom regular expressions and response placeholder restoration.
+- A read-only admin API with a bounded usage index, and the embedded React dashboard with overview, sessions, providers and keys pages.
+- Light and dark dashboard screenshots, a synthetic sticky routing replay with published results, build and demo targets, and dashboard build checks in CI.
+- The agent features and admin API guides, and decision records ADR 0027 through ADR 0033.
+
 - Prometheus metrics on the admin port at `server.admin_listen`, with an admin token for addresses that are not loopback addresses, and Go profiles behind `server.pprof`.
 - OpenTelemetry traces with the GenAI attributes: one trace for each request, with a span for each upstream attempt, sent as OTLP JSON to `telemetry.otlp_endpoint`.
 - The `x-tollgate-overhead-ms` response header.

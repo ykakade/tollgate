@@ -395,7 +395,7 @@ func TestParseLimitsAndBudgets(t *testing.T) {
 	if cfg.Store.Kind != StoreRedis || cfg.Store.RedisURL.Value() != "redis://localhost:6379/0" {
 		t.Errorf("store = %+v", cfg.Store)
 	}
-	if cfg.Usage != (Usage{Sink: SinkJSONL, Path: "/etc/tollgate/data/usage.jsonl", QueueSize: 100}) {
+	if cfg.Usage != (Usage{Sink: SinkJSONL, Path: "/etc/tollgate/data/usage.jsonl", QueueSize: 100, IndexEvents: DefaultUsageIndexEvents}) {
 		t.Errorf("usage = %+v", cfg.Usage)
 	}
 	if cfg.Pricing.File != "/etc/tollgate/prices.yaml" || !cfg.Prices.Has("local", "openai", "qwen") {
@@ -411,7 +411,7 @@ func TestParseM2Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Store.Kind != StoreMemory || cfg.Usage != (Usage{Sink: SinkJSONL, Path: "/srv/data/usage.jsonl", QueueSize: DefaultUsageQueueSize}) || cfg.Reservation.OutputTokens != DefaultReserveOutputTokens {
+	if cfg.Store.Kind != StoreMemory || cfg.Usage != (Usage{Sink: SinkJSONL, Path: "/srv/data/usage.jsonl", QueueSize: DefaultUsageQueueSize, IndexEvents: DefaultUsageIndexEvents}) || cfg.Reservation.OutputTokens != DefaultReserveOutputTokens {
 		t.Errorf("defaults: store %+v, usage %+v, reservation %+v", cfg.Store, cfg.Usage, cfg.Reservation)
 	}
 	if !cfg.Prices.Has("anthropic", "anthropic", "claude-sonnet-5-5") {
@@ -698,5 +698,37 @@ func TestDemoConfig(t *testing.T) {
 	}
 	if cfg.Server.AdminToken.Value() == "" || cfg.Telemetry.OTLPEndpoint == "" || !cfg.Server.PProf {
 		t.Errorf("the demo needs an admin token, tracing and profiles: %+v %+v", cfg.Server, cfg.Telemetry)
+	}
+}
+
+func TestAgentSettings(t *testing.T) {
+	cfg, err := Parse("test.yaml", []byte("version: 1\n"), testEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Sessions.DeriveOn() || !cfg.Sessions.StickyOn() || cfg.Sessions.WarnRatio != 0.8 || cfg.ResponseCache.MaxBytes != DefaultResponseCacheBytes {
+		t.Fatalf("agent defaults: sessions %+v, cache %+v", cfg.Sessions, cfg.ResponseCache)
+	}
+	cfg, err = Parse("test.yaml", []byte("version: 1\nsessions: {derive: false, sticky: false, warn_ratio: 0.5}\nusage: {index_events: 25}\n"), testEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sessions.DeriveOn() || cfg.Sessions.StickyOn() || cfg.Sessions.WarnRatio != 0.5 || cfg.Usage.IndexEvents != 25 {
+		t.Fatalf("agent settings not applied: sessions %+v, usage %+v", cfg.Sessions, cfg.Usage)
+	}
+	for _, input := range []string{
+		"sessions: {warn_ratio: 0}",
+		"sessions: {warn_ratio: 1.1}",
+		"sessions: {warn_ratio: .nan}",
+		"usage: {index_events: -1}",
+		"usage: {index_events: 10000001}",
+		"response_cache: {max_bytes: 2GiB}",
+		"response_cache: {max_bytes: 1MiB, max_entry_bytes: 2MiB}",
+	} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := Parse("test.yaml", []byte("version: 1\n"+input+"\n"), testEnv()); err == nil {
+				t.Fatal("invalid agent setting was accepted")
+			}
+		})
 	}
 }

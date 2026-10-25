@@ -96,3 +96,22 @@ func TestMeterModel(t *testing.T) {
 		t.Errorf("stream model = %q, want gpt-x", got)
 	}
 }
+
+func TestStreamMeterRunning(t *testing.T) {
+	m := NewStreamMeter()
+	m.TrackOutput()
+	stream := `data: {"choices":[{"index":0,"delta":{"content":"01234567"}}]}` + "\n\n" +
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"x\":2}"}}]}}]}` + "\n\n"
+	if _, err := m.Write([]byte(stream)); err != nil {
+		t.Fatal(err)
+	}
+	if u, ok := m.Running(); ok || u.OutputTokens != 4 {
+		t.Errorf("Running = %+v, %v; want output 4 (15 bytes / 4) and no input usage", u, ok)
+	}
+	if _, err := m.Write([]byte(`data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":30}}` + "\n\n")); err != nil {
+		t.Fatal(err)
+	}
+	if u, ok := m.Running(); !ok || u.InputTokens != 7 || u.OutputTokens != 30 {
+		t.Errorf("Running = %+v, %v after the usage chunk", u, ok)
+	}
+}

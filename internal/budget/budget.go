@@ -44,6 +44,12 @@ func SessionKey(tenant, session string) string {
 	return "tg:bud:sess:" + tag(tenant) + ":" + session
 }
 
+// StickyKey is the key of the sticky routing entry of a session (ADR
+// 0028).
+func StickyKey(tenant, session string) string {
+	return "tg:sticky:" + tag(tenant) + ":" + session
+}
+
 // MonthTTL is the lifetime of the month counter at t: to the end of the
 // month in UTC and 7 days more.
 func MonthTTL(t time.Time) time.Duration {

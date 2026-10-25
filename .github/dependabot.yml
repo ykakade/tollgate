@@ -38,3 +38,12 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: chore
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    groups:
+      dashboard:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore

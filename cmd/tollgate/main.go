@@ -25,6 +25,7 @@ import (
 	"github.com/ykakade/tollgate/internal/server"
 	"github.com/ykakade/tollgate/internal/telemetry"
 	"github.com/ykakade/tollgate/internal/usage"
+	"github.com/ykakade/tollgate/web"
 )
 
 // usageCloseTimeout is the longest time to write the queued usage events
@@ -45,6 +46,7 @@ Commands:
   init              Show a starter configuration file.
   keys create       Make a virtual key for a client.
   config validate   Check a configuration file.
+  report            Show the cost and the cache use from the usage file.
   version           Show the version of this binary.
   help              Show this help.
 
@@ -89,6 +91,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 		return runConfigValidate(rest[1:], stdout, stderr)
+	case "report":
+		return runReport(rest, stdout, stderr)
 	case "version":
 		if len(rest) > 0 {
 			fmt.Fprintf(stderr, "The version command takes no arguments. Remove %q and try again.\n", rest[0])
@@ -184,11 +188,23 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Tollgate cannot open the usage file %s: %v. Make sure that Tollgate can write to the directory.\n", cfg.Usage.Path, err)
 		return exitError
 	}
-	opts := server.Options{Config: cfg, Adapters: adapters, Logger: logger, Store: store, Metrics: metrics, Tracer: tracer}
+	index := usage.NewIndex(cfg.Usage.IndexEvents)
+	opts := server.Options{Config: cfg, Adapters: adapters, Logger: logger, Store: store, Metrics: metrics, Tracer: tracer, Usage: index}
 	if queue != nil {
-		opts.Usage = queue
+		opts.Usage = tee{queue, index}
 		metrics.WatchUsageDropped(cfg.Usage.Sink, queue.Dropped)
 		defer closeUsage(ctx, queue, logger)
+	}
+	if cfg.Usage.Sink == config.SinkJSONL {
+		if err := loadIndex(ctx, index, cfg.Usage.Path, logger); err != nil {
+			fmt.Fprintf(stderr, "Tollgate cannot read the usage file %s: %v\n", cfg.Usage.Path, err)
+			return exitError
+		}
+	}
+	dashboard, err := web.Handler()
+	if err != nil {
+		fmt.Fprintf(stderr, "Tollgate cannot start the dashboard: %v\n", err)
+		return exitError
 	}
 	srv, err := server.New(opts)
 	if err != nil {
@@ -218,7 +234,21 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 	adminDone := make(chan struct{})
 	go func() {
 		defer close(adminDone)
-		h := admin.Handler(admin.Options{Metrics: metrics.Handler(), Token: cfg.Server.AdminToken.Value(), PProf: cfg.Server.PProf})
+		api := &admin.API{
+			Index:    index,
+			Config:   cfg,
+			Breakers: srv.Breakers,
+			Info: admin.Info{
+				Version:        buildinfo.Read().Version,
+				Started:        time.Now().UTC(),
+				Store:          cfg.Store.Kind,
+				UsageSink:      cfg.Usage.Sink,
+				DeriveSessions: cfg.Sessions.DeriveOn(),
+				StickyRouting:  cfg.Sessions.StickyOn(),
+				IndexCapacity:  cfg.Usage.IndexEvents,
+			},
+		}
+		h := admin.Handler(admin.Options{Metrics: metrics.Handler(), Token: cfg.Server.AdminToken.Value(), PProf: cfg.Server.PProf, API: api.Handler(), Dashboard: dashboard})
 		if err := admin.Serve(adminCtx, adminLn, h, logger); err != nil {
 			logger.ErrorContext(ctx, "admin port failed", "error", err.Error())
 		}
@@ -331,6 +361,28 @@ func closeUsage(ctx context.Context, q *usage.Queue, logger *slog.Logger) {
 	if n := q.Dropped(); n > 0 {
 		logger.WarnContext(ctx, "usage events dropped", "events", n)
 	}
+}
+
+// tee gives each usage event to the usage queue and to the index.
+type tee struct {
+	queue *usage.Queue
+	index *usage.Index
+}
+
+func (t tee) Emit(e usage.Event) bool {
+	t.index.Emit(e)
+	return t.queue.Emit(e)
+}
+
+// loadIndex adds the events of the usage file to the index, so that the
+// admin API and the dashboard show the requests before the start.
+func loadIndex(ctx context.Context, index *usage.Index, path string, logger *slog.Logger) error {
+	events, bad, err := usage.ReadEvents(path, func(e *usage.Event) { index.Emit(*e) })
+	if err != nil {
+		return err
+	}
+	logger.InfoContext(ctx, "usage index loaded from the usage file", "events", events, "bad_lines", bad, "kept", index.Len())
+	return nil
 }
 
 // restoreSpend rebuilds the month and session spend of the memory store

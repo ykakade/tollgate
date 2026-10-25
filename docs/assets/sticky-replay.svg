@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="354" viewBox="0 0 720 354" role="img" aria-labelledby="title desc" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+<title id="title">Sticky routing cost 25% less in the 6 min outage</title>
+<desc id="desc">Cost of one replayed agent session of 40 turns. no outage: 0.2599 USD with sticky routing, 0.2599 USD without; 100 s outage: 0.2942 USD with sticky routing, 0.3094 USD without; 6 min outage: 0.2942 USD with sticky routing, 0.3903 USD without.</desc>
+<style>
+.surface{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.t3{fill:#898781}
+.grid{stroke:#e1e0d9;stroke-width:1}.base{stroke:#c3c2b7;stroke-width:1}
+.on{fill:#2a78d6}.off{fill:#eb6834}
+@media (prefers-color-scheme: dark){
+.surface{fill:#1a1a19}.t1{fill:#f0efec}.t2{fill:#c3c2b7}
+.grid{stroke:#2c2c2a}.base{stroke:#383835}
+.on{fill:#3987e5}.off{fill:#d95926}}
+text{font-size:12px}.title{font-size:16px;font-weight:600}.num{font-variant-numeric:tabular-nums}
+</style>
+<rect class="surface" width="720" height="354" rx="8"/>
+<text class="t1 title" x="20" y="32">Sticky routing cost 25% less in the 6 min outage</text>
+<text class="t2" x="20" y="52">Cost of one agent session of 40 requests, in USD. The primary target fails during the outage.</text>
+<rect class="on" x="20" y="68" width="12" height="12" rx="2"/><text class="t2" x="38" y="78">Sticky routing on</text>
+<rect class="off" x="160" y="68" width="12" height="12" rx="2"/><text class="t2" x="178" y="78">Sticky routing off</text>
+<line class="base" x1="150.0" y1="96" x2="150.0" y2="278"/>
+<text class="t3 num" x="150.0" y="294" text-anchor="middle">0.00</text>
+<line class="grid" x1="260.0" y1="96" x2="260.0" y2="278"/>
+<text class="t3 num" x="260.0" y="294" text-anchor="middle">0.10</text>
+<line class="grid" x1="370.0" y1="96" x2="370.0" y2="278"/>
+<text class="t3 num" x="370.0" y="294" text-anchor="middle">0.20</text>
+<line class="grid" x1="480.0" y1="96" x2="480.0" y2="278"/>
+<text class="t3 num" x="480.0" y="294" text-anchor="middle">0.30</text>
+<line class="grid" x1="590.0" y1="96" x2="590.0" y2="278"/>
+<text class="t3 num" x="590.0" y="294" text-anchor="middle">0.40</text>
+<text class="t1" x="20" y="127">no outage</text>
+<path class="on" d="M150 104 H431.8 Q435.8 104 435.8 108.0 V118.0 Q435.8 122 431.8 122 H150 Z"/>
+<path class="off" d="M150 124 H431.8 Q435.8 124 435.8 128.0 V138.0 Q435.8 142 431.8 142 H150 Z"/>
+<text class="t1 num" x="441.8" y="117">0.260</text>
+<text class="t2 num" x="441.8" y="137">0.260</text>
+<text class="t1" x="20" y="191">100 s outage</text>
+<path class="on" d="M150 168 H469.6 Q473.6 168 473.6 172.0 V182.0 Q473.6 186 469.6 186 H150 Z"/>
+<path class="off" d="M150 188 H486.3 Q490.3 188 490.3 192.0 V202.0 Q490.3 206 486.3 206 H150 Z"/>
+<text class="t1 num" x="479.6" y="181">0.294 (5% less)</text>
+<text class="t2 num" x="496.3" y="201">0.309</text>
+<text class="t1" x="20" y="255">6 min outage</text>
+<path class="on" d="M150 232 H469.6 Q473.6 232 473.6 236.0 V246.0 Q473.6 250 469.6 250 H150 Z"/>
+<path class="off" d="M150 252 H575.4 Q579.4 252 579.4 256.0 V266.0 Q579.4 270 575.4 270 H150 Z"/>
+<text class="t1 num" x="479.6" y="245">0.294 (25% less)</text>
+<text class="t2 num" x="585.4" y="265">0.390</text>
+<text class="t3" x="20" y="326">Synthetic session, two fake providers with a simulated 5-minute prompt cache, prices of claude-sonnet-5-5.</text>
+<text class="t3" x="20" y="342">Source: testdata/replay/results.json, made by TestStickyReplay (make replay).</text>
+</svg>
