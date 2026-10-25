@@ -114,3 +114,19 @@ func TestStreamMeterMalformed(t *testing.T) {
 		t.Errorf("large event: Write error = %v, want ErrMalformed", err)
 	}
 }
+
+func TestMeterModel(t *testing.T) {
+	m := NewStreamMeter()
+	if got := m.Model(); got != "" {
+		t.Errorf("model before message_start = %q", got)
+	}
+	_, _ = m.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-x\"}}\n\n"))
+	if got := m.Model(); got != "claude-x" {
+		t.Errorf("stream model = %q, want claude-x", got)
+	}
+	b := NewBodyMeter()
+	_, _ = b.Write([]byte(`{"model":"claude-y","usage":{"input_tokens":1}}`))
+	if got := b.Model(); got != "claude-y" {
+		t.Errorf("body model = %q, want claude-y", got)
+	}
+}

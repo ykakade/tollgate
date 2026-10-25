@@ -84,3 +84,15 @@ func TestStreamMeterMalformed(t *testing.T) {
 		t.Errorf("Write([DONE]) error = %v", err)
 	}
 }
+
+func TestMeterModel(t *testing.T) {
+	m := NewStreamMeter()
+	_, _ = m.Write([]byte("data: {\"model\":\"gpt-x\",\"choices\":[]}\n\n"))
+	if got := m.Model(); got != "" {
+		t.Errorf("model before the usage chunk = %q, want empty", got)
+	}
+	_, _ = m.Write([]byte("data: {\"model\":\"gpt-x\",\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}\n\n"))
+	if got := m.Model(); got != "gpt-x" {
+		t.Errorf("stream model = %q, want gpt-x", got)
+	}
+}

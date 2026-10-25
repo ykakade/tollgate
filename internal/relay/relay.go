@@ -64,6 +64,7 @@ type Attempt struct {
 	stopped  bool
 
 	firstByte time.Time
+	lastByte  time.Time
 }
 
 // Start starts the connect timer and returns the attempt. Send the
@@ -99,6 +100,10 @@ func (a *Attempt) Err() error {
 // FirstByte returns the time of the first body byte, or the zero time if
 // no body byte came.
 func (a *Attempt) FirstByte() time.Time { return a.firstByte }
+
+// LastByte returns the time of the last body byte, or the zero time if no
+// body byte came.
+func (a *Attempt) LastByte() time.Time { return a.lastByte }
 
 // Stop stops the timers and releases the attempt context. Call it after the
 // response body is closed.
@@ -164,8 +169,9 @@ func (a *Attempt) Copy(w http.ResponseWriter, body io.Reader, meter io.Writer) (
 		n, rerr := body.Read(buf)
 		if n > 0 {
 			a.pause()
+			a.lastByte = time.Now()
 			if a.firstByte.IsZero() {
-				a.firstByte = time.Now()
+				a.firstByte = a.lastByte
 			}
 			if err := a.write(rc, w, buf[:n]); err != nil {
 				a.cancel(ErrClientWrite)

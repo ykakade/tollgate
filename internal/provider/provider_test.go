@@ -130,3 +130,24 @@ func TestBodyMeter(t *testing.T) {
 		t.Error("Usage() of an empty body = ok, want no usage")
 	}
 }
+
+func TestBodyMeterModel(t *testing.T) {
+	parse := func([]byte) (Usage, bool) { return Usage{}, true }
+	for _, tt := range []struct {
+		name  string
+		limit int
+		body  string
+		want  string
+	}{
+		{"model", 100, `{"model":"m1"}`, "m1"},
+		{"empty", 100, "", ""},
+		{"not json", 100, "{", ""},
+		{"over limit", 4, `{"model":"m1"}`, ""},
+	} {
+		m := NewBodyMeter(tt.limit, parse)
+		_, _ = m.Write([]byte(tt.body))
+		if got := m.Model(); got != tt.want {
+			t.Errorf("%s: Model() = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}

@@ -93,6 +93,7 @@ type StreamMeter struct {
 	parser *sse.Parser
 	u      usage
 	seen   bool
+	model  string
 	err    error
 }
 
@@ -128,12 +129,16 @@ func (m *StreamMeter) event(e sse.Event) {
 	case "message_start":
 		var v struct {
 			Message struct {
+				Model string `json:"model"`
 				Usage *usage `json:"usage"`
 			} `json:"message"`
 		}
-		if json.Unmarshal(e.Data, &v) == nil && v.Message.Usage != nil {
-			m.u.merge(v.Message.Usage)
-			m.seen = true
+		if json.Unmarshal(e.Data, &v) == nil {
+			m.model = v.Message.Model
+			if v.Message.Usage != nil {
+				m.u.merge(v.Message.Usage)
+				m.seen = true
+			}
 		}
 	case "message_delta":
 		var v struct {
@@ -149,6 +154,11 @@ func (m *StreamMeter) event(e sse.Event) {
 // Usage implements provider.Meter.
 func (m *StreamMeter) Usage() (provider.Usage, bool) {
 	return m.u.value(), m.seen
+}
+
+// Model returns the model that the message_start event names, or "".
+func (m *StreamMeter) Model() string {
+	return m.model
 }
 
 // AtBoundary reports whether the stream so far ends between two events.

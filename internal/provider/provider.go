@@ -8,6 +8,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net"
@@ -243,6 +244,21 @@ func (m *BodyMeter) Write(p []byte) (int, error) {
 	}
 	m.buf = append(m.buf, p...)
 	return len(p), nil
+}
+
+// Model returns the top-level "model" field of the body, or "". Both the
+// Messages API and the Chat Completions API have this field.
+func (m *BodyMeter) Model() string {
+	if m.over || len(m.buf) == 0 {
+		return ""
+	}
+	var v struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(m.buf, &v) != nil {
+		return ""
+	}
+	return v.Model
 }
 
 // Usage implements Meter.

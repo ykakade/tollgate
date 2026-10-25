@@ -66,6 +66,7 @@ type StreamMeter struct {
 	parser *sse.Parser
 	u      provider.Usage
 	seen   bool
+	model  string
 	err    error
 }
 
@@ -107,12 +108,19 @@ func (m *StreamMeter) event(e sse.Event) {
 		return
 	}
 	var v struct {
+		Model string `json:"model"`
 		Usage *usage `json:"usage"`
 	}
 	if json.Unmarshal(e.Data, &v) == nil && v.Usage != nil {
 		m.u = v.Usage.value()
 		m.seen = true
+		m.model = v.Model
 	}
+}
+
+// Model returns the model that the usage chunk names, or "".
+func (m *StreamMeter) Model() string {
+	return m.model
 }
 
 // Usage implements provider.Meter.
