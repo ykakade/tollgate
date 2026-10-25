@@ -24,7 +24,7 @@ tollgate init > tollgate.yaml
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `version` | number | none | The version of the file format. Set it to `1`. |
-| `server` | mapping | | The data plane listener. |
+| `server` | mapping | | The data plane and the admin port. |
 | `store` | mapping | | The store of the rate limit and budget counters. |
 | `usage` | mapping | | The usage events. |
 | `pricing` | mapping | | The price table. |
@@ -34,6 +34,7 @@ tollgate init > tollgate.yaml
 | `tenants` | list | | The users or teams, with their keys. |
 | `retry` | mapping | | The attempt limit and retry budget. |
 | `breaker` | mapping | | The circuit breaker settings. |
+| `telemetry` | mapping | | The traces. |
 
 ## server
 
@@ -42,6 +43,11 @@ tollgate init > tollgate.yaml
 | `listen` | text | `:8080` | The address of the data plane, as `host:port`. |
 | `max_body_bytes` | size | `16MiB` | The largest request body that Tollgate accepts. The maximum value is `1GiB`. A larger body gets status 413. |
 | `drain_timeout` | duration | `10m` | After `SIGTERM`, the longest time that open requests can continue. See [operations](operations.md). |
+| `admin_listen` | text | `127.0.0.1:9090` | The address of the admin port, as `host:port`. It serves `/metrics`. Use a port that is different from `listen`. |
+| `admin_token` | reference | none | The bearer token of the admin port, as `env:NAME` or `file:/path`. Necessary if `admin_listen` is not a loopback address. |
+| `pprof` | boolean | `false` | `true` adds the Go profiles under `/debug/pprof/` on the admin port. |
+
+The admin port is separate from the data plane, so clients cannot read the metrics or the profiles. See [observability](observability.md#admin-port) and [ADR 0025](adr/0025-admin-port.md).
 
 ## store
 
@@ -176,6 +182,14 @@ See [reliability](reliability.md#retry-budget) for the shared budget within one 
 
 Breakers and 429 cooldowns are local to each process. See [reliability](reliability.md#circuit-breakers).
 
+## telemetry
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `otlp_endpoint` | URL | empty | The URL of an OTLP/HTTP receiver, for example `http://localhost:4318`. Tollgate adds `/v1/traces` if the path does not end with it. Empty turns tracing off. |
+
+Tollgate sends spans in the OTLP JSON encoding. The `OTEL_EXPORTER_OTLP_HEADERS` environment variable can add request headers, for example a key of a tracing service. See [traces](observability.md#traces).
+
 ## tenants
 
 | Field | Type | Default | Description |
@@ -235,6 +249,7 @@ version: 1
 
 server:
   listen: ":8080"
+  admin_listen: "127.0.0.1:9090"
   max_body_bytes: 16MiB
   drain_timeout: 10m
 
@@ -266,6 +281,9 @@ routes:
 
 pricing:
   file: ./pricing.yaml
+
+telemetry:
+  otlp_endpoint: http://localhost:4318
 
 tenants:
   - id: personal

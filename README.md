@@ -23,6 +23,7 @@ One Go binary that controls cost, rate limits, and failover for the Anthropic an
 - **Stops slow providers.** Each route has a connect, first-token, idle and total timeout.
 - **Does not cut streams at shutdown.** On `SIGTERM`, Tollgate refuses new requests and lets open streams finish.
 - **Stops upstream requests that nobody reads.** If the client disconnects, Tollgate cancels the request to the provider.
+- **Shows what happens.** Prometheus metrics, OpenTelemetry traces with a span for each upstream attempt, and a Grafana dashboard. See [observability](docs/observability.md).
 
 ## Build from source
 
@@ -100,6 +101,11 @@ If Tollgate does not start, run `./bin/tollgate config validate -config tollgate
 
 To use Tollgate with Claude Code and the Anthropic API, see [examples/claude-code](examples/claude-code/).
 
+## Demo with metrics and traces
+
+If you have Docker Compose, run `make demo`. It starts Tollgate, fake providers, a load generator, Prometheus, Grafana and Jaeger.
+Then open the Tollgate dashboard at `http://127.0.0.1:3000`. Run `make demo-down` to stop the stack. See [the demo stack](docs/observability.md#demo-stack).
+
 ## Commands
 
 | Command | What it does |
@@ -115,6 +121,7 @@ To use Tollgate with Claude Code and the Anthropic API, see [examples/claude-cod
 - [Configuration](docs/configuration.md): each field of the configuration file
 - [Reliability](docs/reliability.md): fallback rules, breakers, cloud targets, and M3 acceptance tests
 - [Operations](docs/operations.md): start, stop, health endpoints and logs
+- [Observability](docs/observability.md): metrics, traces, the admin port, the dashboard and the demo stack
 - [M1 validation](docs/m1-validation.md): acceptance checks and validation limits
 - [Decision records](docs/adr/): the design decisions and the reasons for them
 - [Glossary](docs/glossary.md): the technical words that the documents use

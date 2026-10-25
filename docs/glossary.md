@@ -11,6 +11,7 @@ All Tollgate documents use these words with these meanings only. If a document n
 | access log | The JSON line that Tollgate writes for each request. It has metadata only, never bodies or keys. |
 | adapter | The code that sends requests to one kind of provider, for example Anthropic or Vertex AI. |
 | admin port | The second listener of Tollgate. It serves metrics, the admin API, and the dashboard. By default, it listens on `127.0.0.1:9090`. |
+| admin token | The bearer token that the admin port needs when it is not on a loopback address. |
 | ADR | Architecture decision record. One file in `docs/adr/` that records one design decision. |
 | budget | The maximum spend for a tenant in a window, in USD. |
 | cache read tokens | Input tokens that the provider reads from its prompt cache. They cost less than other input tokens. |
@@ -27,13 +28,16 @@ All Tollgate documents use these words with these meanings only. If a document n
 | fallback | To send a request to the next target after a failure. |
 | first byte | The first byte of the response that Tollgate sends to the client. After the first byte, Tollgate does not fall back. |
 | first-token timeout | The longest time that Tollgate waits for the first part of a response from a provider. |
+| gateway overhead | The time in Tollgate before the first upstream request, without the time to read the request body. |
 | golden file | A file in `testdata/` that holds the expected bytes of a response. Tests compare the output of Tollgate with it. |
 | hard budget | A budget that stops requests when the spend reaches the limit. |
+| inter-token latency | The mean time between two output tokens of one stream. |
 | idle timeout | The longest time between two parts of a response body. It is also the longest time to write one part to the client. |
 | limit store | The store of the rate limit and budget counters: memory for one copy, Redis for two or more copies. |
 | local limit | The rate limit that each copy keeps in memory and uses when Redis is not available. |
 | micro-USD | One millionth of a US dollar. Tollgate stores all amounts in micro-USD. |
 | overspend | The spend over the limit of a hard budget. Its largest value is in `docs/limits.md`. |
+| OTLP | OpenTelemetry Protocol. The protocol that Tollgate uses to send spans to a trace receiver. |
 | preflight | The step that reads the model and the stream setting of a request and estimates its tokens and cost. |
 | price table | The list of prices for each provider and model, by date. The default is `pricing.yaml`. |
 | provider | A service that runs LLMs, for example Anthropic, OpenAI, Vertex AI, or Ollama. |
@@ -45,6 +49,7 @@ All Tollgate documents use these words with these meanings only. If a document n
 | route | The configuration for one model name that clients send. It gives the API format and the list of targets. |
 | session | A group of requests from one agent task. |
 | settle | To replace a reservation with the real cost after the response. |
+| span | One timed step of a request in a trace, for example one upstream attempt. |
 | sliding-window counter | The method that Tollgate uses to count requests and tokens for the last 60 seconds from two one-minute counters. |
 | soft budget | A budget that only gives a warning when the spend reaches the limit. |
 | SSE | Server-sent events. The stream format that Anthropic and OpenAI use. |
@@ -56,6 +61,8 @@ All Tollgate documents use these words with these meanings only. If a document n
 | Ollama | A local model server with an OpenAI-compatible API. |
 | Vertex AI | The Google Cloud service that hosts Claude models. |
 | target | One provider and one model in the list of a route. |
+| time to first token | The time from the start of a request to the first byte of the response body. |
+| trace | The spans of one request. Each request is one trace. |
 | tenant | A user or a team that has its own keys, limits, and budgets. |
 | total timeout | The longest time for one full upstream request. |
 | usage event | The record of one request: tokens, cost, timing, and status. |

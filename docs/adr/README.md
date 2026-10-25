@@ -30,6 +30,8 @@ Each record has a number, a status, and a date. To change a decision, write a ne
 | [0022](0022-retry-budget.md) | Limit extra attempts with a local retry budget | Accepted |
 | [0023](0023-breakers.md) | Keep circuit breakers in each process | Accepted |
 | [0024](0024-cloud-adapter.md) | Use Vertex AI for the Claude cloud host | Accepted |
+| [0025](0025-admin-port.md) | Serve metrics and profiles on a separate admin port | Accepted |
+| [0026](0026-otlp-json-exporter.md) | Export traces as OTLP JSON with an in-house exporter | Accepted |
 
 ## Template
 

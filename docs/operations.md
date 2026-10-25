@@ -21,7 +21,7 @@ Prerequisites:
    tollgate serve -config tollgate.yaml
    ```
 
-Result: Tollgate writes the line `server started` with the listen address to standard error.
+Result: Tollgate writes the lines `server started` and `admin port started` with their addresses to standard error. With tracing on, it also writes `tracing started`.
 
 With `store.kind: memory`, Tollgate first reads the usage file and writes the line `spend restored from the usage file` with the number of events and the spend of the month. See [restarts](limits.md#restarts).
 
@@ -37,6 +37,11 @@ If Tollgate does not start, read the messages on standard error. Each message te
 Use `/healthz` for a liveness probe and `/readyz` for a readiness probe.
 
 The body of `/readyz` has the state of the limit store, for example `{"status":"ready","store":"ok"}`. If Redis does not answer, the body has `"store":"unavailable"`, and the status stays 200 ([ADR 0020](adr/0020-readyz-store.md)). Monitor this field to find a Redis outage.
+
+## Metrics and traces
+
+Prometheus reads `GET /metrics` on the admin port, by default `127.0.0.1:9090`. To send traces, set `telemetry.otlp_endpoint`.
+See [observability](observability.md) for the metrics, the spans, the admin token, and the Grafana dashboard.
 
 ## Run more than one copy
 
@@ -115,6 +120,10 @@ Tollgate also writes these warnings:
 | `upstream attempt failed, trying again` | An upstream failure caused a retry or fallback. The line names the current and next targets. |
 | `circuit breaker changed` | A breaker changed state. The line names the provider, model, region, and old and new states. |
 | `usage events dropped` | At shutdown: the number of usage events that Tollgate did not write, because the queue was full or the file failed. |
+| `spans not sent to the OTLP receiver. Tollgate drops spans until the receiver is available.` | An export of spans failed. Tollgate writes this line one time until an export works again. Then it writes `spans sent to the OTLP receiver again` at the `info` level. |
+| `spans not sent at shutdown` | At shutdown: Tollgate could not send the last spans in 5 seconds. |
+
+Tollgate writes `admin port failed` at the `error` level if the admin port stops because of an error. The data plane continues.
 
 ## Usage file
 

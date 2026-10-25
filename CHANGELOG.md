@@ -8,6 +8,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Prometheus metrics on the admin port at `server.admin_listen`, with an admin token for addresses that are not loopback addresses, and Go profiles behind `server.pprof`.
+- OpenTelemetry traces with the GenAI attributes: one trace for each request, with a span for each upstream attempt, sent as OTLP JSON to `telemetry.otlp_endpoint`.
+- The `x-tollgate-overhead-ms` response header.
+- The demo stack in `deploy/compose` with Prometheus, Grafana, Jaeger and a load generator, the Grafana dashboard in `deploy/grafana`, and the `make demo`, `make demo-check` and `make demo-down` targets.
+- The `-first-token-delay` and `-token-interval` flags of the fake provider.
+- The observability guide, decision records ADR 0025 and ADR 0026, and a CI job that checks the demo stack for live data.
+
 - Ordered fallback targets, retries before the first response byte, a retry budget, and circuit breakers for each provider, model, and region.
 - The `retry` and `breaker` configuration fields, 429 cooldowns from `retry-after`, and reservation at the most expensive target's estimate.
 - The `vertex` provider kind for Claude with Google Application Default Credentials, and the `ollama` kind for local models.
