@@ -4,11 +4,12 @@ This page tells you how to report a security problem in Tollgate.
 
 ## Supported versions
 
-Tollgate has no release yet. After the first release, only the latest minor version gets security fixes.
+Only the latest minor version gets security fixes.
 
 | Version | Security fixes |
 | --- | --- |
-| No release yet | Not applicable |
+| 0.1.x | Yes |
+| Earlier versions | No |
 
 ## Report a problem
 

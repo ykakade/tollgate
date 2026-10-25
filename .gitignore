@@ -5,3 +5,4 @@ coverage.out
 
 # Local copy of the build brief. It is not part of the repository.
 /BRIEF.md
+/dist/

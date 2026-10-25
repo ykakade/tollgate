@@ -6,7 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-25
+
 ### Added
+
+- Release archives for Linux on amd64 and arm64, with checksums, a keyless cosign signature and GitHub build provenance attestations.
+- The demo GIF in the README, recorded with VHS from `docs/demo/demo.tape` by `make demo-gif`.
 
 - Derived session IDs, a warning at the session budget threshold, approximate hard-budget stream cutoffs, and spend projections.
 - Sticky routing with provider cache TTLs, target switch records, cache loss estimates, and the `tollgate report` command.
@@ -55,3 +60,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - The decision records ADR 0001 to ADR 0015, and the glossary.
 - The build, test, and lint targets in the `Makefile`, and the CI workflow.
 - The contribution guide, the security policy, the code of conduct, and the issue and pull request templates.
+
+[Unreleased]: https://github.com/ykakade/tollgate/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ykakade/tollgate/releases/tag/v0.1.0

@@ -4,10 +4,15 @@ A lightweight AI gateway for coding agents.
 One Go binary that controls cost, rate limits, and failover for the Anthropic and OpenAI APIs.
 
 [![CI](https://github.com/ykakade/tollgate/actions/workflows/ci.yml/badge.svg)](https://github.com/ykakade/tollgate/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ykakade/tollgate)](https://github.com/ykakade/tollgate/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 > [!NOTE]
 > Status: alpha. The configuration format can change before v1.0.
+
+![Claude Code sends a request through Tollgate. The primary provider fails, Tollgate sends the request to the backup, and the dashboard shows the spend.](docs/assets/demo.gif)
+
+The demo uses fake providers. Run `make demo-gif` to record it again. See [docs/demo](docs/demo/).
 
 ## What Tollgate does
 
@@ -33,6 +38,47 @@ One Go binary that controls cost, rate limits, and failover for the Anthropic an
 </picture>
 
 The screenshot uses synthetic demo data. Run `make dashboard-demo` to reproduce the demo.
+
+## Install
+
+Release binaries are available for Linux on amd64 and arm64. Each archive has `tollgate` and the `fakeprovider` test server.
+
+1. Download and extract the archive for your CPU:
+
+   ```sh
+   VERSION=0.1.0
+   ARCH=amd64 # or arm64
+   curl -fsSLO "https://github.com/ykakade/tollgate/releases/download/v${VERSION}/tollgate_${VERSION}_linux_${ARCH}.tar.gz"
+   curl -fsSLO "https://github.com/ykakade/tollgate/releases/download/v${VERSION}/checksums.txt"
+   sha256sum --ignore-missing -c checksums.txt
+   tar -xzf "tollgate_${VERSION}_linux_${ARCH}.tar.gz" tollgate fakeprovider
+   ```
+
+2. Optional: verify the build provenance with the GitHub CLI:
+
+   ```sh
+   gh attestation verify "tollgate_${VERSION}_linux_${ARCH}.tar.gz" --repo ykakade/tollgate
+   ```
+
+3. Optional: verify the signature of the checksum file with [cosign](https://docs.sigstore.dev/cosign/system_config/installation/):
+
+   ```sh
+   curl -fsSLO "https://github.com/ykakade/tollgate/releases/download/v${VERSION}/checksums.txt.sigstore.json"
+   cosign verify-blob checksums.txt \
+     --bundle checksums.txt.sigstore.json \
+     --certificate-identity "https://github.com/ykakade/tollgate/.github/workflows/release.yml@refs/tags/v${VERSION}" \
+     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+   ```
+
+4. Show the version:
+
+   ```sh
+   ./tollgate version
+   ```
+
+Result: Tollgate shows its version, its commit, and the Go version. The procedures below use `./bin/tollgate`. With a release archive, use `./tollgate` and `./fakeprovider`.
+
+On macOS or Windows, install with Go: `go install github.com/ykakade/tollgate/cmd/tollgate@latest`. You can also build from source.
 
 ## Build from source
 
@@ -113,7 +159,7 @@ To use Tollgate with Claude Code and the Anthropic API, see [examples/claude-cod
 ## Demo with metrics and traces
 
 If you have Docker Compose, run `make demo`. It starts Tollgate, fake providers, a load generator, Prometheus, Grafana and Jaeger.
-Then open the Tollgate dashboard at `http://127.0.0.1:3000`. Run `make demo-down` to stop the stack. See [the demo stack](docs/observability.md#demo-stack).
+Then open Grafana at `http://127.0.0.1:3000`. Run `make demo-down` to stop the stack. See [the demo stack](docs/observability.md#demo-stack).
 
 ## Commands
 
@@ -128,7 +174,10 @@ Then open the Tollgate dashboard at `http://127.0.0.1:3000`. Run `make demo-down
 ## Documentation
 
 - [Configuration](docs/configuration.md): each field of the configuration file
+- [Rate limits and budgets](docs/limits.md): limits, budgets, and their tolerances
 - [Reliability](docs/reliability.md): fallback rules, breakers, cloud targets, and M3 acceptance tests
+- [Agent features](docs/agent-features.md): sessions, sticky routing, the response cache, and redaction
+- [Admin API and dashboard](docs/admin-api.md): the endpoints of the admin port and the dashboard
 - [Operations](docs/operations.md): start, stop, health endpoints and logs
 - [Observability](docs/observability.md): metrics, traces, the admin port, the dashboard and the demo stack
 - [M1 validation](docs/m1-validation.md): acceptance checks and validation limits

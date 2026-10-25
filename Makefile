@@ -125,6 +125,10 @@ web-check: web ## Fail if the committed dashboard assets differ from the source.
 replay: ## Write the sticky routing replay results and chart again.
 	$(GO) test ./internal/server -run '^TestStickyReplay$$' -count=1 -update-replay
 
+.PHONY: demo-gif
+demo-gif: build ## Record docs/assets/demo.gif. Needs vhs, ffmpeg, jq, Claude Code and Chrome, see docs/demo.
+	docs/demo/record.sh
+
 .PHONY: dashboard-demo
 dashboard-demo: build ## Start the dashboard demo with synthetic usage. Stop with Ctrl-C.
 	node web/scripts/demo.mjs

@@ -1,0 +1,65 @@
+# GoReleaser configuration. The release workflow runs it for each version
+# tag. Releases build only in CI. Run "goreleaser release --snapshot --clean
+# --skip=sign" to check the archives locally.
+version: 2
+
+project_name: tollgate
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: tollgate
+    main: ./cmd/tollgate
+    binary: tollgate
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # The Go toolchain records the version and commit, so no -X flags.
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux]
+    goarch: [amd64, arm64]
+  - id: fakeprovider
+    main: ./cmd/fakeprovider
+    binary: fakeprovider
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - pricing.yaml
+
+checksum:
+  name_template: checksums.txt
+
+# Keyless cosign signature of the checksum file, as a Sigstore bundle.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
+
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: ykakade
+    name: tollgate
+  prerelease: auto

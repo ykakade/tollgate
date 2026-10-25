@@ -2,3 +2,5 @@
 ^https://github\.com/ykakade/tollgate/security/advisories/new$
 # The demo stack and the examples use local addresses.
 ^https?://(127\.0\.0\.1|localhost)(:\d+)?(/.*)?$
+# Release pages exist only after the release workflow publishes the tag.
+^https://github\.com/ykakade/tollgate/(releases/(tag|download)/v|compare/v|blob/v)
