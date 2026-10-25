@@ -299,3 +299,43 @@ func TestIDsAreUnique(t *testing.T) {
 		seen[v.ID] = true
 	}
 }
+
+// TestDelays checks the first-token delay and the token interval. The
+// stream has 6 tokens, so it takes at least the delay and 5 intervals.
+func TestDelays(t *testing.T) {
+	const delay, interval = 60 * time.Millisecond, 10 * time.Millisecond
+	fp := New(Config{FirstTokenDelay: delay, TokenInterval: interval})
+	srv := httptest.NewServer(fp.Handler())
+	t.Cleanup(srv.Close)
+	n := len(splitReply(Reply))
+	minTotal := delay + time.Duration(n-1)*interval
+	for _, tt := range []struct{ name, path, body string }{
+		{"anthropic stream", "/v1/messages", withField(anthropicBody, `"stream":true`)},
+		{"anthropic body", "/v1/messages", anthropicBody},
+		{"openai stream", "/v1/chat/completions", withField(openaiBody, `"stream":true`)},
+		{"openai body", "/v1/chat/completions", openaiBody},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			start := time.Now()
+			req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+tt.path, strings.NewReader(tt.body))
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			first := make([]byte, 1)
+			if _, err := io.ReadFull(resp.Body, first); err != nil {
+				t.Fatal(err)
+			}
+			if got := time.Since(start); got < delay {
+				t.Errorf("first byte after %v, want at least %v", got, delay)
+			}
+			if _, err := io.ReadAll(resp.Body); err != nil {
+				t.Fatal(err)
+			}
+			if got := time.Since(start); got < minTotal {
+				t.Errorf("reply took %v, want at least %v", got, minTotal)
+			}
+		})
+	}
+}

@@ -5,6 +5,9 @@
 // The -scenario flag makes every request fail on purpose, for example
 // -scenario status:529. The x-fake-scenario header does the same for one
 // request. See the fakeprovider package for the scenarios.
+//
+// The -first-token-delay and -token-interval flags make the replies as slow
+// as a real model, for demos and benchmarks.
 package main
 
 import (
@@ -45,11 +48,16 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	listen := fs.String("listen", "127.0.0.1:8090", "Address to listen on.")
 	scenario := fs.String("scenario", "", "Failure `scenario` for all requests, for example status:529 or reset-after:5-tokens.")
+	firstDelay := fs.Duration("first-token-delay", 0, "Wait before the first body byte of each reply, for example 300ms.")
+	interval := fs.Duration("token-interval", 0, "Wait between two output tokens, for example 20ms.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *firstDelay < 0 || *interval < 0 {
+		return errors.New("the -first-token-delay and -token-interval flags must not be negative")
+	}
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
-	fp := fakeprovider.New(fakeprovider.Config{Logger: logger})
+	fp := fakeprovider.New(fakeprovider.Config{Logger: logger, FirstTokenDelay: *firstDelay, TokenInterval: *interval})
 	if err := fp.SetScenario(*scenario); err != nil {
 		return fmt.Errorf("the -scenario flag: %w", err)
 	}

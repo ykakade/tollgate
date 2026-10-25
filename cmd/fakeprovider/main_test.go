@@ -33,6 +33,8 @@ func TestRunErrors(t *testing.T) {
 		{name: "unknown flag", args: []string{"-port", "1"}},
 		{name: "bad address", args: []string{"-listen", "256.0.0.1:1"}},
 		{name: "bad scenario", args: []string{"-scenario", "explode"}},
+		{name: "negative delay", args: []string{"-first-token-delay", "-1s"}},
+		{name: "negative interval", args: []string{"-token-interval", "-1ms"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

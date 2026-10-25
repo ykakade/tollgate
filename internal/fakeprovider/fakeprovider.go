@@ -41,6 +41,13 @@ type Config struct {
 	// Scenario is the scenario of all requests that do not send the
 	// ScenarioHeader. Empty means a normal reply.
 	Scenario string
+	// FirstTokenDelay is the time before the first body byte of each
+	// reply.
+	FirstTokenDelay time.Duration
+	// TokenInterval is the time between two output tokens of a stream.
+	// A reply that is not a stream waits for all its tokens before it
+	// sends the body.
+	TokenInterval time.Duration
 }
 
 // Server is a fake provider. Use New to make one.
@@ -52,14 +59,18 @@ type Server struct {
 
 	requests atomic.Uint64
 	scenario atomic.Pointer[string]
+
+	firstDelay, interval time.Duration
 }
 
 // New returns a Server with the given configuration.
 func New(cfg Config) *Server {
 	s := &Server{
-		logger: cfg.Logger,
-		now:    cfg.Now,
-		chunks: splitReply(Reply),
+		logger:     cfg.Logger,
+		now:        cfg.Now,
+		chunks:     splitReply(Reply),
+		firstDelay: cfg.FirstTokenDelay,
+		interval:   cfg.TokenInterval,
 	}
 	if s.logger == nil {
 		s.logger = slog.New(slog.DiscardHandler)
@@ -148,15 +159,39 @@ type eventWriter struct {
 	sc scenario
 	// tokens is the number of token events written.
 	tokens int
+	// firstDelay is the wait before the first event, and interval the
+	// wait between two token events.
+	firstDelay, interval time.Duration
+	started              bool
 }
 
 // startStream writes the headers of an event stream response.
-func startStream(w http.ResponseWriter, sc scenario) *eventWriter {
+func (s *Server) startStream(w http.ResponseWriter, sc scenario) *eventWriter {
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	return &eventWriter{w: w, rc: http.NewResponseController(w), sc: sc}
+	return &eventWriter{w: w, rc: http.NewResponseController(w), sc: sc, firstDelay: s.firstDelay, interval: s.interval}
+}
+
+// bodyDelay returns the wait before a reply body with n output tokens.
+func (s *Server) bodyDelay(n int) time.Duration {
+	return s.firstDelay + time.Duration(max(n-1, 0))*s.interval
+}
+
+// sleep waits for d, or until ctx ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("stop stream: %w", ctx.Err())
+	}
 }
 
 // write sends one event. If name is empty, the event has no event field.
@@ -187,9 +222,20 @@ type sseEvent struct {
 // writeAll sends events in order. It stops if ctx ends. It runs the
 // scenarios that fail after a number of tokens.
 func (e *eventWriter) writeAll(ctx context.Context, events []sseEvent) error {
-	for _, ev := range events {
+	for i, ev := range events {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("stop stream: %w", err)
+		}
+		if i == 0 && !e.started {
+			if err := sleep(ctx, e.firstDelay); err != nil {
+				return err
+			}
+		}
+		e.started = true
+		if ev.token && e.tokens > 0 {
+			if err := sleep(ctx, e.interval); err != nil {
+				return err
+			}
 		}
 		if ev.token {
 			if e.tokens == e.sc.tokens {

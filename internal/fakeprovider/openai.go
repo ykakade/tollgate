@@ -132,7 +132,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	if req.Stream {
 		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage && usage != nil
-		err := s.streamOpenAI(r, startStream(w, sc), openaiChunk{
+		err := s.streamOpenAI(r, s.startStream(w, sc), openaiChunk{
 			ID:      id,
 			Object:  "chat.completion.chunk",
 			Created: created,
@@ -151,6 +151,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			FinishReason: finishReason,
 		}},
 		Usage: usage,
+	}
+	if err := sleep(r.Context(), s.bodyDelay(len(chunks))); err != nil {
+		s.logRequest(r, start, 0, false, err)
+		return
 	}
 	s.logRequest(r, start, http.StatusOK, false, writeBody(w, r, sc, resp))
 }

@@ -178,7 +178,7 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, start time.Tim
 	}
 
 	if req.Stream {
-		err := s.streamAnthropic(r, startStream(w, sc), id, req.Model, chunks, stopReason, usage)
+		err := s.streamAnthropic(r, s.startStream(w, sc), id, req.Model, chunks, stopReason, usage)
 		s.logRequest(r, start, http.StatusOK, true, err)
 		return
 	}
@@ -190,6 +190,10 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request, start time.Tim
 		Content:    []anthropicTextBlock{{Type: "text", Text: strings.Join(chunks, "")}},
 		StopReason: &stopReason,
 		Usage:      usage,
+	}
+	if err := sleep(r.Context(), s.bodyDelay(len(chunks))); err != nil {
+		s.logRequest(r, start, 0, false, err)
+		return
 	}
 	s.logRequest(r, start, http.StatusOK, false, writeBody(w, r, sc, msg))
 }
