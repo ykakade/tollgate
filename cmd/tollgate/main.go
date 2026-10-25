@@ -153,7 +153,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitError
 	}
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
-	adapters, err := server.NewAdapters(cfg.Providers, nil)
+	adapters, err := server.NewAdapters(ctx, cfg.Providers, server.AdapterOptions{})
 	if err != nil {
 		fmt.Fprintf(stderr, "Tollgate cannot start the providers: %v\n", err)
 		return exitError

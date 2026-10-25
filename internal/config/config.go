@@ -33,11 +33,29 @@ const (
 	APIOpenAI    API = "openai"
 )
 
-// Provider kinds. A provider kind is also the API format that it speaks.
+// Provider kinds. KindAPI gives the API format of each kind.
 const (
 	KindAnthropic = "anthropic"
 	KindOpenAI    = "openai"
+	// KindVertex is Claude on Google Cloud Vertex AI. It speaks the
+	// Anthropic format (ADR 0024).
+	KindVertex = "vertex"
+	// KindOllama is a local Ollama server. It speaks the OpenAI format,
+	// and its requests cost nothing unless the price table has an entry.
+	KindOllama = "ollama"
 )
+
+// KindAPI returns the API format of a provider kind, or "" if the kind is
+// not known.
+func KindAPI(kind string) API {
+	switch kind {
+	case KindAnthropic, KindVertex:
+		return APIAnthropic
+	case KindOpenAI, KindOllama:
+		return APIOpenAI
+	}
+	return ""
+}
 
 // Defaults.
 const (
@@ -53,6 +71,12 @@ const (
 	DefaultUsagePath           = "./data/usage.jsonl"
 	DefaultUsageQueueSize      = 10000
 	DefaultReserveOutputTokens = 4096
+
+	DefaultMaxAttempts  = 3
+	DefaultBudgetRatio  = 0.1
+	DefaultFailureRatio = 0.5
+	DefaultMinRequests  = 20
+	DefaultOpenFor      = 30 * time.Second
 )
 
 // Store kinds.
@@ -86,19 +110,24 @@ const (
 	maxReserveOutputTokens = 10_000_000
 	maxRequestsPerMinute   = 1_000_000_000
 	maxTokensPerMinute     = 10_000_000_000
+	maxAttempts            = 10
+	maxTargets             = 10
+	maxMinRequests         = 1_000_000
 )
 
 // maxBodyBytesLimit is the largest value of server.max_body_bytes.
 const maxBodyBytesLimit = 1 << 30
 
 // defaultBaseURLs holds the base URL of each provider kind that has one.
+// A vertex provider has no entry: its URL comes from its region.
 var defaultBaseURLs = map[string]string{
 	KindAnthropic: "https://api.anthropic.com",
 	KindOpenAI:    "https://api.openai.com",
+	KindOllama:    "http://localhost:11434",
 }
 
 // laterKinds are provider kinds that the brief plans for a later version.
-var laterKinds = map[string]bool{"vertex": true, "bedrock": true}
+var laterKinds = map[string]bool{"bedrock": true}
 
 // Config is the complete configuration.
 type Config struct {
@@ -111,6 +140,8 @@ type Config struct {
 	Providers   map[string]Provider `yaml:"providers"`
 	Routes      []Route             `yaml:"routes"`
 	Tenants     []Tenant            `yaml:"tenants"`
+	Retry       Retry               `yaml:"retry"`
+	Breaker     Breaker             `yaml:"breaker"`
 
 	// Prices is the price table: the file in Pricing.File, or the table
 	// in the binary.
@@ -161,6 +192,33 @@ type Provider struct {
 	Kind    string `yaml:"kind"`
 	BaseURL string `yaml:"base_url"`
 	APIKey  Secret `yaml:"api_key"`
+	// Project is the Google Cloud project of a vertex provider.
+	Project string `yaml:"project"`
+	// Region is the Vertex AI location of a vertex provider: "global",
+	// a multi-region such as "us", or a region such as "us-east5".
+	Region string `yaml:"region"`
+}
+
+// Retry holds the retry rules of all routes (ADR 0021 and ADR 0022).
+type Retry struct {
+	// MaxAttempts is the largest number of upstream attempts for one
+	// request, the first attempt included.
+	MaxAttempts int `yaml:"max_attempts"`
+	// BudgetRatio is the largest part of requests that can have an
+	// extra attempt.
+	BudgetRatio float64 `yaml:"budget_ratio"`
+}
+
+// Breaker holds the settings of the circuit breakers (ADR 0023).
+type Breaker struct {
+	// FailureRatio opens a breaker when this part of the recent attempts
+	// failed.
+	FailureRatio float64 `yaml:"failure_ratio"`
+	// MinRequests is the smallest number of recent attempts that can
+	// open a breaker.
+	MinRequests int `yaml:"min_requests"`
+	// OpenFor is the time that an open breaker refuses attempts.
+	OpenFor Duration `yaml:"open_for"`
 }
 
 // Route maps a model name that clients send to its targets.
@@ -286,7 +344,7 @@ func Parse(name string, data []byte, env Env) (*Config, error) {
 	} else if !errors.Is(err, io.EOF) {
 		v.yamlError(err)
 	}
-	cfg.applyDefaults()
+	cfg.applyDefaults(v)
 	v.validate(&cfg)
 	if err := v.result(); err != nil {
 		return nil, err
@@ -294,7 +352,7 @@ func Parse(name string, data []byte, env Env) (*Config, error) {
 	return &cfg, nil
 }
 
-func (c *Config) applyDefaults() {
+func (c *Config) applyDefaults(v *validator) {
 	if c.Server.Listen == "" {
 		c.Server.Listen = DefaultListen
 	}
@@ -319,6 +377,19 @@ func (c *Config) applyDefaults() {
 	if c.Reservation.OutputTokens == 0 {
 		c.Reservation.OutputTokens = DefaultReserveOutputTokens
 	}
+	if c.Retry.MaxAttempts == 0 {
+		c.Retry.MaxAttempts = DefaultMaxAttempts
+	}
+	if !v.isSet("retry", "budget_ratio") {
+		c.Retry.BudgetRatio = DefaultBudgetRatio
+	}
+	if c.Breaker.FailureRatio == 0 {
+		c.Breaker.FailureRatio = DefaultFailureRatio
+	}
+	if c.Breaker.MinRequests == 0 {
+		c.Breaker.MinRequests = DefaultMinRequests
+	}
+	setDefault(&c.Breaker.OpenFor, DefaultOpenFor)
 	for i := range c.Tenants {
 		for j := range c.Tenants[i].Budgets {
 			if c.Tenants[i].Budgets[j].Mode == "" {
@@ -478,6 +549,23 @@ func yamlMessage(m string) string {
 		return m
 	}
 	return "The YAML is not valid: " + m + "."
+}
+
+// isSet reports whether the YAML tree has a node at path.
+func (v *validator) isSet(path ...any) bool {
+	n := v.root
+	if n == nil {
+		return false
+	}
+	if n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
+		n = n.Content[0]
+	}
+	for _, step := range path {
+		if n = child(n, step); n == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // line returns the line of the node at path in the YAML tree. A string in

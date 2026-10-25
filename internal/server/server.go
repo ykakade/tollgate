@@ -13,14 +13,19 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/oauth2"
+
 	"github.com/ykakade/tollgate/internal/auth"
 	"github.com/ykakade/tollgate/internal/config"
 	"github.com/ykakade/tollgate/internal/limiter"
+	"github.com/ykakade/tollgate/internal/preflight"
 	"github.com/ykakade/tollgate/internal/pricing"
 	"github.com/ykakade/tollgate/internal/provider"
 	"github.com/ykakade/tollgate/internal/provider/anthropic"
 	"github.com/ykakade/tollgate/internal/provider/openai"
+	"github.com/ykakade/tollgate/internal/provider/vertex"
 	"github.com/ykakade/tollgate/internal/relay"
+	"github.com/ykakade/tollgate/internal/router"
 	"github.com/ykakade/tollgate/internal/usage"
 )
 
@@ -77,6 +82,8 @@ type Server struct {
 	now           func() time.Time
 	prices        *pricing.Table
 	reserveOutput int64
+	router        *router.Router
+	maxAttempts   int
 }
 
 type routeKey struct {
@@ -85,11 +92,51 @@ type routeKey struct {
 }
 
 type route struct {
-	target config.Target
-	// kind is the kind of the target provider, for the price table.
-	kind     string
-	adapter  provider.Adapter
-	timeouts relay.Timeouts
+	model string
+	// all holds the targets of the route, in order. count holds the
+	// targets that support /v1/messages/count_tokens.
+	all, count targetList
+	timeouts   relay.Timeouts
+}
+
+// targetList is an ordered list of targets and their breaker keys.
+type targetList struct {
+	targets []*target
+	keys    []router.Key
+}
+
+func (l *targetList) add(t *target) {
+	l.targets = append(l.targets, t)
+	l.keys = append(l.keys, t.key)
+}
+
+// target is one provider and model of a route.
+type target struct {
+	config.Target
+	// kind is the kind of the provider, for the price table and the body
+	// edits.
+	kind    string
+	adapter provider.Adapter
+	key     router.Key
+}
+
+// name returns "provider/model" for messages.
+func (t *target) name() string { return t.Provider + "/" + t.Model }
+
+// body returns the request body for the target.
+func (t *target) body(pre *preflight.Request, includeUsage bool) ([]byte, error) {
+	if t.kind == config.KindVertex {
+		b, err := pre.VertexBody(vertex.Version)
+		if err != nil {
+			return nil, fmt.Errorf("make vertex body: %w", err)
+		}
+		return b, nil
+	}
+	b, err := pre.Rewrite(t.Model, includeUsage)
+	if err != nil {
+		return nil, fmt.Errorf("rewrite body: %w", err)
+	}
+	return b, nil
 }
 
 // New makes a server from a validated configuration.
@@ -111,6 +158,7 @@ func New(opts Options) (*Server, error) {
 		now:           opts.Now,
 		prices:        cfg.Prices,
 		reserveOutput: cfg.Reservation.OutputTokens,
+		maxAttempts:   cfg.Retry.MaxAttempts,
 	}
 	if s.logger == nil {
 		s.logger = slog.New(slog.DiscardHandler)
@@ -121,19 +169,28 @@ func New(opts Options) (*Server, error) {
 	if s.now == nil {
 		s.now = time.Now
 	}
+	s.router = router.New(router.Settings{
+		FailureRatio: cfg.Breaker.FailureRatio,
+		MinRequests:  cfg.Breaker.MinRequests,
+		OpenFor:      cfg.Breaker.OpenFor.Std(),
+		BudgetRatio:  cfg.Retry.BudgetRatio,
+		Now:          s.now,
+		OnChange: func(k router.Key, from, to router.State) {
+			s.logger.Warn("circuit breaker changed",
+				"provider", k.Provider,
+				"provider_model", k.Model,
+				"region", k.Region,
+				"from", from.String(),
+				"to", to.String(),
+			)
+		},
+	})
 	for _, r := range cfg.Routes {
 		if len(r.Targets) == 0 {
 			return nil, fmt.Errorf("route %s has no targets", r.Model)
 		}
-		target := r.Targets[0]
-		adapter, ok := opts.Adapters[target.Provider]
-		if !ok {
-			return nil, fmt.Errorf("route %s: no adapter for provider %s", r.Model, target.Provider)
-		}
-		s.routes[routeKey{r.API, r.Model}] = &route{
-			target:  target,
-			kind:    cfg.Providers[target.Provider].Kind,
-			adapter: adapter,
+		rt := &route{
+			model: r.Model,
 			timeouts: relay.Timeouts{
 				Connect:    r.Timeouts.Connect.Std(),
 				FirstToken: r.Timeouts.FirstToken.Std(),
@@ -141,6 +198,24 @@ func New(opts Options) (*Server, error) {
 				Total:      r.Timeouts.Total.Std(),
 			},
 		}
+		for _, tc := range r.Targets {
+			adapter, ok := opts.Adapters[tc.Provider]
+			if !ok {
+				return nil, fmt.Errorf("route %s: no adapter for provider %s", r.Model, tc.Provider)
+			}
+			p := cfg.Providers[tc.Provider]
+			t := &target{
+				Target:  tc,
+				kind:    p.Kind,
+				adapter: adapter,
+				key:     router.Key{Provider: tc.Provider, Model: tc.Model, Region: p.Region},
+			}
+			rt.all.add(t)
+			if p.Kind != config.KindVertex {
+				rt.count.add(t)
+			}
+		}
+		s.routes[routeKey{r.API, r.Model}] = rt
 	}
 	for _, t := range cfg.Tenants {
 		models := make(map[string]bool)
@@ -152,10 +227,22 @@ func New(opts Options) (*Server, error) {
 	return s, nil
 }
 
+// AdapterOptions are the options of NewAdapters.
+type AdapterOptions struct {
+	// Transport, if not nil, is the transport of all adapters. If nil,
+	// each adapter has its own transport.
+	Transport http.RoundTripper
+	// GoogleTokens, if not nil, gives the access tokens of the vertex
+	// providers. If nil, NewAdapters uses the Google Application Default
+	// Credentials.
+	GoogleTokens oauth2.TokenSource
+}
+
 // NewAdapters makes one adapter for each provider in a validated
-// configuration. If rt is nil, each adapter has its own transport.
-func NewAdapters(providers map[string]config.Provider, rt http.RoundTripper) (map[string]provider.Adapter, error) {
+// configuration.
+func NewAdapters(ctx context.Context, providers map[string]config.Provider, opts AdapterOptions) (map[string]provider.Adapter, error) {
 	out := make(map[string]provider.Adapter, len(providers))
+	rt := opts.Transport
 	for name, p := range providers {
 		var (
 			a   provider.Adapter
@@ -164,8 +251,15 @@ func NewAdapters(providers map[string]config.Provider, rt http.RoundTripper) (ma
 		switch p.Kind {
 		case config.KindAnthropic:
 			a, err = anthropic.New(p.BaseURL, p.APIKey.Value(), rt)
-		case config.KindOpenAI:
+		case config.KindOpenAI, config.KindOllama:
 			a, err = openai.New(p.BaseURL, p.APIKey.Value(), rt)
+		case config.KindVertex:
+			if opts.GoogleTokens == nil {
+				if opts.GoogleTokens, err = vertex.DefaultTokenSource(ctx); err != nil {
+					return nil, fmt.Errorf("provider %s: %w. Run \"gcloud auth application-default login\", or set GOOGLE_APPLICATION_CREDENTIALS", name, err)
+				}
+			}
+			a, err = vertex.New(p.BaseURL, p.Project, p.Region, opts.GoogleTokens, rt)
 		default:
 			err = fmt.Errorf("unknown provider kind %q", p.Kind)
 		}
@@ -181,7 +275,7 @@ func NewAdapters(providers map[string]config.Provider, rt http.RoundTripper) (ma
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/messages", s.proxy(endpoint{api: config.APIAnthropic, path: "/v1/messages", metered: true}))
-	mux.Handle("POST /v1/messages/count_tokens", s.proxy(endpoint{api: config.APIAnthropic, path: "/v1/messages/count_tokens"}))
+	mux.Handle("POST "+countTokensPath, s.proxy(endpoint{api: config.APIAnthropic, path: countTokensPath}))
 	mux.Handle("POST /v1/chat/completions", s.proxy(endpoint{api: config.APIOpenAI, path: "/v1/chat/completions", metered: true}))
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
@@ -351,6 +445,8 @@ func errorMessage(target config.Target, timeouts relay.Timeouts, cause error, st
 		return fmt.Sprintf("The provider %q sent no data for %s (idle timeout). Tollgate stopped the response.", p, timeouts.Idle)
 	case errors.Is(cause, relay.ErrTotalTimeout):
 		return fmt.Sprintf("The request took longer than %s (total timeout). Tollgate stopped the response.", timeouts.Total)
+	case errors.Is(cause, provider.ErrMalformed):
+		return fmt.Sprintf("The provider %q sent a response that is not valid. Tollgate stopped the response.", p)
 	case started:
 		return fmt.Sprintf("The connection to the provider %q failed during the response. Tollgate stopped the response.", p)
 	default:

@@ -37,7 +37,11 @@ type tenantPolicy struct {
 
 // admission is the result of the limit check of one request.
 type admission struct {
-	price   *pricing.Entry
+	// prices and costs hold the price and the estimated cost of each
+	// target. est has the largest cost, so the reservation covers each
+	// target (ADR 0021).
+	prices  []*pricing.Entry
+	costs   []int64
 	est     budget.Estimate
 	rates   []limiter.Rate
 	budgets []limiter.Budget
@@ -54,14 +58,25 @@ func (a *admission) counted() bool {
 // admit checks the rate limits and budgets of the request and reserves its
 // estimated cost. If the request cannot continue, admit sends the error
 // response and returns false.
-func (s *Server) admit(ctx context.Context, x *exchange, ep endpoint, rt *route, pre *preflight.Request, bodyLen int) (*admission, bool) {
+func (s *Server) admit(ctx context.Context, x *exchange, ep endpoint, list *targetList, pre *preflight.Request, bodyLen int) (*admission, bool) {
 	tenant := x.identity.TenantID
 	tp := s.tenants[tenant]
 	now := s.now()
-	a := &admission{price: s.prices.Find(rt.target.Provider, rt.kind, rt.target.Model, now)}
+	a := &admission{}
+	for i, t := range list.targets {
+		price := s.prices.Find(t.Provider, t.kind, t.Model, now)
+		est := budget.NewEstimate(price, preflight.EstimateInputTokens(bodyLen), pre.MaxTokens, s.reserveOutput)
+		a.prices = append(a.prices, price)
+		a.costs = append(a.costs, est.Cost)
+		if i == 0 || est.Cost > a.est.Cost {
+			a.est = est
+		}
+	}
 	if ep.metered {
-		a.est = budget.NewEstimate(a.price, preflight.EstimateInputTokens(bodyLen), pre.MaxTokens, s.reserveOutput)
 		a.budgets, a.used = budget.Budgets(tenant, tp.budgets, x.session, now, a.est.Cost)
+	} else {
+		// The response has no usage, so the request reserves nothing.
+		a.est = budget.Estimate{}
 	}
 	a.rates = budget.Rates(tenant, tp.limits, a.est.Tokens(), ep.metered)
 	if !a.counted() {
@@ -154,13 +169,14 @@ func rateHeader(d limiter.Decision) http.Header {
 }
 
 // settle replaces the estimates of the request with its real usage and
-// cost. It runs after the response, also when the client disconnected.
-// If the response stopped early, the usage can be lower than what the
-// provider charges, so the request keeps at least its reservation.
+// cost, with the price of the target that served it. It runs after the
+// response, also when the client disconnected. If the response stopped
+// early, the usage can be lower than what the provider charges, so the
+// request keeps at least the estimated cost of that target.
 func (s *Server) settle(ctx context.Context, x *exchange, a *admission) {
 	var tokens int64
-	if x.usageKnown {
-		x.cost = budget.Charge(a.price, x.usage, x.estimated || x.incomplete, a.est.Cost)
+	if x.usageKnown && x.served >= 0 {
+		x.cost = budget.Charge(a.prices[x.served], x.usage, x.estimated || x.incomplete, a.costs[x.served])
 		tokens = totalTokens(x.usage)
 	}
 	if !a.counted() || !a.decision.Allowed {

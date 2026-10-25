@@ -41,3 +41,18 @@ If the month budget or the session budget has no money left, Claude Code shows a
 If Claude Code shows `The key cannot use the model`, read the model name in the message. Add a route for that model, and add the model to the `models` list of the tenant. Then restart Tollgate.
 
 If Claude Code shows `The API key is not valid`, make sure that `ANTHROPIC_AUTH_TOKEN` is the key that starts with `tg_`, not your Anthropic API key.
+
+## Add a fallback
+
+Goal: Continue a request through a second provider if the first provider fails before the response starts.
+
+Prerequisites: Access to a second Anthropic-compatible provider, or a Google Cloud project with Claude access and Application Default Credentials.
+
+1. Add the second provider to `providers`. For Vertex, use `kind: vertex`, `project`, and `region`; omit `api_key`.
+2. Add it after the first target in each required route. Set `model` to the second provider's model ID.
+3. Add prices for every fallback target to your price table, because this example has hard budgets. Set `pricing.file` to that table.
+4. Run `tollgate config validate -config tollgate.yaml`.
+5. Restart Tollgate.
+
+Result: Tollgate tries the ordered targets before the first response byte. The response header `x-tollgate-provider` names the serving provider.
+If no target can serve the request, read the upstream error or the 502 target list. See [reliability](../../docs/reliability.md).

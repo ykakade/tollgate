@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/ykakade/tollgate/internal/apierror"
@@ -25,6 +26,11 @@ import (
 // disconnected before the response started. It is the nginx convention.
 // Tollgate never sends it.
 const statusClientClosed = 499
+
+// countTokensPath is the path of the Anthropic token count endpoint.
+//
+//nolint:gosec // This is an API path, not a credential.
+const countTokensPath = "/v1/messages/count_tokens"
 
 // endpoint is one proxy path.
 type endpoint struct {
@@ -50,15 +56,18 @@ type exchange struct {
 	providerModel string
 	stream        bool
 	attempts      int
-	usage         provider.Usage
-	usageKnown    bool
-	estimated     bool
-	ttft          time.Duration
-	overhead      time.Duration
-	bytesIn       int
-	bytesOut      int64
-	upstreamID    string
-	err           error
+	// served is the index of the target of the last attempt, or -1.
+	served     int
+	readTime   time.Duration
+	usage      provider.Usage
+	usageKnown bool
+	estimated  bool
+	ttft       time.Duration
+	overhead   time.Duration
+	bytesIn    int
+	bytesOut   int64
+	upstreamID string
+	err        error
 
 	session string
 	// cost is the cost of the request in micro-USD.
@@ -76,7 +85,7 @@ type exchange struct {
 
 // begin starts the exchange and sets the x-request-id header.
 func (s *Server) begin(w http.ResponseWriter, r *http.Request, api config.API) *exchange {
-	x := &exchange{w: w, r: r, api: api, id: rand.Text(), start: time.Now(), ttft: -1}
+	x := &exchange{w: w, r: r, api: api, id: rand.Text(), start: time.Now(), ttft: -1, served: -1}
 	w.Header().Set("X-Request-Id", x.id)
 	return x
 }
@@ -174,7 +183,7 @@ func (s *Server) serveProxy(ctx context.Context, x *exchange, ep endpoint) {
 
 	readStart := time.Now()
 	body, err := s.readBody(w, r)
-	readTime := time.Since(readStart)
+	x.readTime = time.Since(readStart)
 	if err != nil {
 		x.err = err
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
@@ -207,83 +216,30 @@ func (s *Server) serveProxy(ctx context.Context, x *exchange, ep endpoint) {
 		x.fail(http.StatusNotFound, fmt.Sprintf("The model %q has no %s route. Add a route for it to the configuration.", pre.Model, ep.api), 0)
 		return
 	}
-	upBody, err := pre.Rewrite(rt.target.Model, ep.api == config.APIOpenAI && ep.metered && pre.Stream)
+	list := &rt.all
+	if ep.path == countTokensPath {
+		list = &rt.count
+	}
+	if len(list.targets) == 0 {
+		x.fail(http.StatusNotFound, fmt.Sprintf("No target of the model %q supports %s. Add a target with a provider of the kind anthropic.", pre.Model, ep.path), 0)
+		return
+	}
+	f := &flow{ep: ep, rt: rt, list: list, pre: pre, bodies: make([][]byte, len(list.targets))}
+	// The size of the first body gives the input token estimate of all
+	// targets.
+	first, err := f.body(0)
 	if err != nil {
 		x.err = err
 		x.fail(http.StatusBadRequest, decodeMessage(err), 0)
 		return
 	}
-	adm, ok := s.admit(ctx, x, ep, rt, pre, len(upBody))
+	adm, ok := s.admit(ctx, x, ep, list, pre, len(first))
 	if !ok {
 		return
 	}
 	defer s.settle(ctx, x, adm)
 	defer x.flush()
-	x.provider, x.providerModel, x.attempts = rt.target.Provider, rt.target.Model, 1
-
-	a := relay.Start(ctx, rt.timeouts)
-	defer a.Stop()
-	x.overhead = time.Since(x.start) - readTime
-	resp, err := rt.adapter.Send(a.Context(), &provider.Request{ //nolint:contextcheck // The attempt context derives from ctx.
-		Path:     ep.path,
-		RawQuery: r.URL.RawQuery,
-		Header:   r.Header,
-		Body:     upBody,
-	})
-	if err != nil {
-		s.upstreamFailed(ctx, x, rt, a, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	x.upstreamID = upstreamRequestID(resp.Header)
-
-	ok2xx := resp.StatusCode >= 200 && resp.StatusCode < 300
-	isStream := isEventStream(resp.Header)
-	var meter provider.Meter
-	if ep.metered && ok2xx {
-		meter = newMeter(ep.api, isStream)
-	}
-	// Keep the downstream response open until a body byte arrives. Provider
-	// headers alone do not commit us to a successful response (ADR 0016).
-	dst := &responseStartWriter{
-		ResponseWriter: w,
-		x:              x,
-		header:         resp.Header,
-		status:         resp.StatusCode,
-	}
-
-	var meterW io.Writer
-	if meter != nil {
-		meterW = meter
-	}
-	n, copyErr := a.Copy(dst, resp.Body, meterW)
-	x.bytesOut = n
-	if fb := a.FirstByte(); !fb.IsZero() {
-		x.ttft = fb.Sub(x.start)
-	}
-	if copyErr != nil {
-		if !dst.started {
-			s.upstreamFailed(ctx, x, rt, a, copyErr)
-			return
-		}
-		x.err = copyErr
-		x.incomplete = true
-		if isStream && ok2xx && ctx.Err() == nil && !errors.Is(copyErr, relay.ErrClientWrite) {
-			s.writeStreamError(x, rt, meter, copyErr)
-		}
-	} else {
-		// An empty response can complete without calling Write.
-		dst.commit()
-	}
-
-	if meter != nil {
-		x.usage, x.usageKnown = meter.Usage()
-		if !x.usageKnown {
-			x.usage = provider.Usage{InputTokens: preflight.EstimateInputTokens(len(upBody))}
-			x.usageKnown, x.estimated = true, true
-		}
-	}
+	s.forward(ctx, x, f)
 }
 
 // responseStartWriter commits the upstream status and headers on the first
@@ -305,7 +261,7 @@ func (w *responseStartWriter) commit() {
 		h.Set("X-Request-Id", w.x.id)
 		h.Set("X-Tollgate-Provider", w.x.provider)
 		h.Set("X-Tollgate-Model", w.x.providerModel)
-		h.Set("X-Tollgate-Attempts", "1")
+		h.Set("X-Tollgate-Attempts", strconv.Itoa(w.x.attempts))
 		for k, v := range w.x.limitHeader {
 			h[k] = v
 		}
@@ -342,17 +298,6 @@ func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, error
 	return body, nil
 }
 
-// upstreamFailed handles an attempt that failed before the downstream
-// response started.
-func (s *Server) upstreamFailed(ctx context.Context, x *exchange, rt *route, a *relay.Attempt, err error) {
-	x.err = err
-	if ctx.Err() != nil {
-		x.status = statusClientClosed
-		return
-	}
-	x.fail(http.StatusBadGateway, errorMessage(rt.target, rt.timeouts, a.Err(), false), 0)
-}
-
 // boundaryMeter is a meter that knows if the stream is between two events.
 type boundaryMeter interface {
 	AtBoundary() bool
@@ -361,12 +306,12 @@ type boundaryMeter interface {
 // writeStreamError ends a stream that failed after its first byte with an
 // error event (ADR 0007). If the stream stopped inside an event, it first
 // ends that event, so the error event is a separate event.
-func (s *Server) writeStreamError(x *exchange, rt *route, meter provider.Meter, cause error) {
+func (s *Server) writeStreamError(x *exchange, t *target, timeouts relay.Timeouts, meter provider.Meter, cause error) {
 	var event []byte
 	if bm, ok := meter.(boundaryMeter); ok && !bm.AtBoundary() {
 		event = append(event, "\n\n"...)
 	}
-	event = append(event, apierror.StreamEvent(x.api, errorMessage(rt.target, rt.timeouts, cause, true))...)
+	event = append(event, apierror.StreamEvent(x.api, errorMessage(t.Target, timeouts, cause, true))...)
 	if _, err := x.w.Write(event); err == nil { //nolint:gosec // An event stream is not HTML, and the message is JSON-encoded.
 		_ = http.NewResponseController(x.w).Flush()
 	}

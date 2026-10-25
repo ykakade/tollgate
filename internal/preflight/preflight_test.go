@@ -128,6 +128,35 @@ func TestEstimateInputTokens(t *testing.T) {
 	}
 }
 
+func TestVertexBody(t *testing.T) {
+	const v = "vertex-2023-10-16"
+	for _, tt := range []struct{ name, body, want string }{
+		{"model first", `{"model":"m","max_tokens":5}`, `{"anthropic_version":"vertex-2023-10-16","max_tokens":5}`},
+		{"model first with space", "{ \"model\" : \"m\" ,\n \"max_tokens\":5}", "{\"anthropic_version\":\"vertex-2023-10-16\",\n \"max_tokens\":5}"},
+		{"model last", `{"max_tokens":5, "model":"m"}`, `{"anthropic_version":"vertex-2023-10-16","max_tokens":5}`},
+		{"model in the middle", `{"a":1,"model":"m","b":2}`, `{"anthropic_version":"vertex-2023-10-16","a":1,"b":2}`},
+		{"only model", `{"model":"m"}`, `{"anthropic_version":"vertex-2023-10-16"}`},
+		{"version in body", `{"anthropic_version":"x","model":"m"}`, `{"anthropic_version":"x"}`},
+		{"nested model stays", `{"model":"m","metadata":{"model":"keep"}}`, `{"anthropic_version":"vertex-2023-10-16","metadata":{"model":"keep"}}`},
+	} {
+		body := []byte(tt.body)
+		r, err := Decode(body)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		got, err := r.VertexBody(v)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if string(got) != tt.want {
+			t.Errorf("%s:\n got %s\nwant %s", tt.name, got, tt.want)
+		}
+		if string(body) != tt.body {
+			t.Errorf("%s: VertexBody changed the input body", tt.name)
+		}
+	}
+}
+
 func FuzzPreflightDecode(f *testing.F) {
 	f.Add([]byte(`{"model":"m","stream":true,"messages":[]}`))
 	f.Add([]byte(`{"model":"m","stream_options":{"include_usage":false,"x":[1,{"y":null}]}}`))
@@ -144,6 +173,17 @@ func FuzzPreflightDecode(f *testing.F) {
 		}
 		if !jsontext.Value(out).IsValid() {
 			t.Fatalf("Rewrite made JSON that is not valid: %s", out)
+		}
+		vb, err := r.VertexBody("vertex-2023-10-16")
+		if err != nil {
+			t.Fatalf("VertexBody: %v", err)
+		}
+		var top map[string]jsontext.Value
+		if err := json.Unmarshal(vb, &top); err != nil {
+			t.Fatalf("VertexBody made JSON that is not valid: %v\nbody: %s", err, vb)
+		}
+		if _, ok := top["model"]; ok || top["anthropic_version"] == nil {
+			t.Fatalf("VertexBody: model or anthropic_version is wrong: %s", vb)
 		}
 		r2, err := Decode(out)
 		if err != nil {

@@ -59,3 +59,7 @@
       cache_read: 50000
       cache_write: 625000
       cache_write_1h: 1000000
+
+# Vertex prices must be explicit. Use a provider name or the kind vertex,
+# and the exact model ID of the target. Do not reuse direct API prices.
+# An ollama target with no price entry costs 0. An explicit entry overrides it.

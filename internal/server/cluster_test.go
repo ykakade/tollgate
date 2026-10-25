@@ -62,6 +62,11 @@ func sharedStores(t *testing.T) map[string]func(t *testing.T) limiter.Store {
 func copies(t *testing.T, n int, upstream http.Handler, s setup) []*env {
 	t.Helper()
 	out := make([]*env, n)
+	// These tests measure shared counters, not upstream latency. Allow
+	// room for the burst under the race detector on a busy CI host.
+	if s.timeouts == "" {
+		s.timeouts = "{connect: 10s, first_token: 10s, idle: 10s, total: 60s}"
+	}
 	for i := range out {
 		out[i] = newEnv(t, upstream, s)
 	}
@@ -78,6 +83,7 @@ func statusOf(t *testing.T, e *env, body string) int {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
+	e.done.wait(t, resp.Header.Get("X-Request-Id"))
 	return resp.StatusCode
 }
 

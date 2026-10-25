@@ -1,6 +1,10 @@
 // Command fakeprovider is a test server that speaks the Anthropic Messages API
 // and the OpenAI Chat Completions API wire formats. It always returns the same
 // reply. Use it to test Tollgate and its clients without a real provider.
+//
+// The -scenario flag makes every request fail on purpose, for example
+// -scenario status:529. The x-fake-scenario header does the same for one
+// request. See the fakeprovider package for the scenarios.
 package main
 
 import (
@@ -40,17 +44,22 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("fakeprovider", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	listen := fs.String("listen", "127.0.0.1:8090", "Address to listen on.")
+	scenario := fs.String("scenario", "", "Failure `scenario` for all requests, for example status:529 or reset-after:5-tokens.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	fp := fakeprovider.New(fakeprovider.Config{Logger: logger})
+	if err := fp.SetScenario(*scenario); err != nil {
+		return fmt.Errorf("the -scenario flag: %w", err)
+	}
 
 	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", *listen)
 	if err != nil {
 		return fmt.Errorf("start listener: %w", err)
 	}
 	srv := &http.Server{
-		Handler:           fakeprovider.New(fakeprovider.Config{Logger: logger}).Handler(),
+		Handler:           fp.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	logger.InfoContext(ctx, "fake provider started", "addr", ln.Addr().String())

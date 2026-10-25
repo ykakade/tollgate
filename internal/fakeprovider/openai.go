@@ -59,7 +59,7 @@ type openaiCompletion struct {
 	Created int64          `json:"created"`
 	Model   string         `json:"model"`
 	Choices []openaiChoice `json:"choices"`
-	Usage   openaiUsage    `json:"usage"`
+	Usage   *openaiUsage   `json:"usage,omitzero"`
 }
 
 type openaiDelta struct {
@@ -99,10 +99,8 @@ type openaiError struct {
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	body, err := readBody(w, r)
-	if err != nil {
-		status := bodyErrorStatus(err)
-		s.logRequest(r, start, status, false, writeOpenAIError(w, status, "The request body is too large or cannot be read."))
+	body, sc, ok := s.prelude(w, r, start, writeOpenAIError)
+	if !ok {
 		return
 	}
 	var req openaiRequest
@@ -121,17 +119,20 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		finishReason = "length"
 	}
 	prompt := inputTokens(body)
-	usage := openaiUsage{
+	usage := &openaiUsage{
 		PromptTokens:     prompt,
 		CompletionTokens: len(chunks),
 		TotalTokens:      prompt + len(chunks),
+	}
+	if sc.kind == kindNoUsage {
+		usage = nil
 	}
 	id := fmt.Sprintf("chatcmpl-fake-%06d", s.nextID())
 	created := s.now().Unix()
 
 	if req.Stream {
-		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		err := s.streamOpenAI(r, startStream(w), openaiChunk{
+		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage && usage != nil
+		err := s.streamOpenAI(r, startStream(w, sc), openaiChunk{
 			ID:      id,
 			Object:  "chat.completion.chunk",
 			Created: created,
@@ -151,7 +152,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}},
 		Usage: usage,
 	}
-	s.logRequest(r, start, http.StatusOK, false, writeJSON(w, http.StatusOK, resp))
+	s.logRequest(r, start, http.StatusOK, false, writeBody(w, r, sc, resp))
 }
 
 // validateOpenAI returns a message for the client if req is not valid, or an
@@ -169,7 +170,7 @@ func validateOpenAI(req openaiRequest) string {
 // streamOpenAI sends the reply as a Chat Completions event stream. base holds
 // the fields that are the same in each chunk. If includeUsage is true, the
 // last chunk before [DONE] has no choices and holds the usage.
-func (s *Server) streamOpenAI(r *http.Request, ew *eventWriter, base openaiChunk, chunks []string, finishReason string, usage openaiUsage, includeUsage bool) error {
+func (s *Server) streamOpenAI(r *http.Request, ew *eventWriter, base openaiChunk, chunks []string, finishReason string, usage *openaiUsage, includeUsage bool) error {
 	if includeUsage {
 		base.Usage = jsontext.Value("null")
 	}
@@ -181,7 +182,9 @@ func (s *Server) streamOpenAI(r *http.Request, ew *eventWriter, base openaiChunk
 	empty := ""
 	events := []sseEvent{chunk(openaiDelta{Role: "assistant", Content: &empty}, nil)}
 	for _, text := range chunks {
-		events = append(events, chunk(openaiDelta{Content: &text}, nil))
+		ev := chunk(openaiDelta{Content: &text}, nil)
+		ev.token = true
+		events = append(events, ev)
 	}
 	events = append(events, chunk(openaiDelta{}, &finishReason))
 	if includeUsage {
@@ -202,7 +205,14 @@ func (s *Server) streamOpenAI(r *http.Request, ew *eventWriter, base openaiChunk
 
 // writeOpenAIError writes an error in the Chat Completions error format.
 func writeOpenAIError(w http.ResponseWriter, status int, msg string) error {
+	errType := "invalid_request_error"
+	switch {
+	case status == http.StatusTooManyRequests:
+		errType = "rate_limit_exceeded"
+	case status >= 500:
+		errType = "server_error"
+	}
 	return writeJSON(w, status, openaiError{
-		Error: openaiErrorDetail{Message: msg, Type: "invalid_request_error"},
+		Error: openaiErrorDetail{Message: msg, Type: errType},
 	})
 }

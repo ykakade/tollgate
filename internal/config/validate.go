@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"path/filepath"
@@ -45,6 +46,22 @@ func (v *validator) validate(c *Config) {
 	routeModels := v.validateRoutes(c.Routes, c.Providers)
 	v.validateTenants(c.Tenants, routeModels)
 	v.validatePrices(c)
+	v.validateRetry(c.Retry, c.Breaker)
+}
+
+func (v *validator) validateRetry(r Retry, b Breaker) {
+	if r.MaxAttempts < 1 || r.MaxAttempts > maxAttempts {
+		v.add(v.line("retry", "max_attempts"), "The value of retry.max_attempts is not valid. Use a number from 1 to %d.", maxAttempts)
+	}
+	if math.IsNaN(r.BudgetRatio) || r.BudgetRatio < 0 || r.BudgetRatio > 1 {
+		v.add(v.line("retry", "budget_ratio"), "The value of retry.budget_ratio is not valid. Use a number from 0 to 1, for example 0.1.")
+	}
+	if math.IsNaN(b.FailureRatio) || b.FailureRatio <= 0 || b.FailureRatio > 1 {
+		v.add(v.line("breaker", "failure_ratio"), "The value of breaker.failure_ratio is not valid. Use a number that is more than 0 and not more than 1, for example 0.5.")
+	}
+	if b.MinRequests < 1 || b.MinRequests > maxMinRequests {
+		v.add(v.line("breaker", "min_requests"), "The value of breaker.min_requests is not valid. Use a number from 1 to %d.", maxMinRequests)
+	}
 }
 
 func (v *validator) validateStore(s *Store) {
@@ -127,7 +144,7 @@ func (v *validator) validatePrices(c *Config) {
 		for j, m := range t.Models {
 			for _, tg := range targets[m] {
 				p, ok := c.Providers[tg.Provider]
-				if ok && !c.Prices.Has(tg.Provider, p.Kind, tg.Model) {
+				if ok && p.Kind != KindOllama && !c.Prices.Has(tg.Provider, p.Kind, tg.Model) {
 					v.add(v.line("tenants", i, "models", j), "The tenant %q has a budget, but the price table has no price for the model %q of the provider %q. Add an entry to the price table. See docs/configuration.md.", t.ID, tg.Model, tg.Provider)
 				}
 			}
@@ -156,23 +173,60 @@ func (v *validator) validateProviders(providers map[string]Provider) {
 			v.add(v.line("providers", name), "The provider name %q is not valid. Use letters, digits, \".\", \"_\" and \"-\", with 64 characters or fewer.", name)
 		}
 		switch {
-		case p.Kind == KindAnthropic || p.Kind == KindOpenAI:
+		case KindAPI(p.Kind) != "":
 		case p.Kind == "":
-			v.add(v.line("providers", name), "The provider %q has no kind. Set kind to anthropic or openai.", name)
+			v.add(v.line("providers", name), "The provider %q has no kind. Set kind to %s.", name, kindList)
 		case laterKinds[p.Kind]:
-			v.add(v.line("providers", name, "kind"), "The provider kind %q is not available in this version. Use anthropic or openai.", p.Kind)
+			v.add(v.line("providers", name, "kind"), "The provider kind %q is not available in this version. Use %s.", p.Kind, kindList)
 		default:
-			v.add(v.line("providers", name, "kind"), "The provider kind %q is not known. Use anthropic or openai.", p.Kind)
+			v.add(v.line("providers", name, "kind"), "The provider kind %q is not known. Use %s.", p.Kind, kindList)
 		}
+		v.validateVertex(name, p)
 		v.validateBaseURL(name, p)
 		v.resolveSecret(&p.APIKey, fmt.Sprintf("The api_key of the provider %q", name), fmt.Sprintf("the API key of the provider %q", name))
 		providers[name] = p
 	}
 }
 
+const kindList = "anthropic, openai, vertex or ollama"
+
+// regionRE is the syntax of a Vertex AI location, such as "global", "us"
+// or "us-east5". The location goes into the host name of the provider.
+var regionRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+
+// projectRE is the syntax of a Google Cloud project ID.
+var projectRE = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+
+// validateVertex checks the fields that only a vertex provider has.
+func (v *validator) validateVertex(name string, p Provider) {
+	if p.Kind != KindVertex {
+		for _, f := range []struct{ field, value string }{{"project", p.Project}, {"region", p.Region}} {
+			if f.value != "" {
+				v.add(v.line("providers", name, f.field), "The provider %q has a %s, but only a vertex provider uses it. Remove %s.", name, f.field, f.field)
+			}
+		}
+		return
+	}
+	switch {
+	case p.Project == "":
+		v.add(v.line("providers", name), "The vertex provider %q has no project. Add the ID of your Google Cloud project.", name)
+	case !projectRE.MatchString(p.Project):
+		v.add(v.line("providers", name, "project"), "The project %q of the provider %q is not a Google Cloud project ID. Use the project ID, not the project name.", p.Project, name)
+	}
+	switch {
+	case p.Region == "":
+		v.add(v.line("providers", name), "The vertex provider %q has no region. Add a region, for example global or us-east5.", name)
+	case !regionRE.MatchString(p.Region):
+		v.add(v.line("providers", name, "region"), "The region %q of the provider %q is not valid. Use a Vertex AI location, for example global or us-east5.", p.Region, name)
+	}
+	if p.APIKey.IsSet() {
+		v.add(v.line("providers", name, "api_key"), "The vertex provider %q has an api_key. Remove it. Tollgate uses the Google Application Default Credentials for Vertex AI.", name)
+	}
+}
+
 func (v *validator) validateBaseURL(name string, p Provider) {
 	if p.BaseURL == "" {
-		if p.Kind == KindAnthropic || p.Kind == KindOpenAI {
+		if p.Kind != KindVertex && KindAPI(p.Kind) != "" {
 			v.add(v.line("providers", name), "The provider %q has no base_url. Add a base_url.", name)
 		}
 		return
@@ -257,13 +311,13 @@ func (v *validator) validateRoutes(routes []Route, providers map[string]Provider
 		}
 		models[r.Model] = true
 
-		switch len(r.Targets) {
-		case 0:
-			v.add(line, "The route %q has no targets. Add one target.", r.Model)
-		case 1:
-		default:
-			v.add(v.line("routes", i, "targets", 1), "The route %q has more than one target. This version of Tollgate supports one target for each route. Remove the other targets.", r.Model)
+		switch {
+		case len(r.Targets) == 0:
+			v.add(line, "The route %q has no targets. Add one target or more.", r.Model)
+		case len(r.Targets) > maxTargets:
+			v.add(v.line("routes", i, "targets", maxTargets), "The route %q has more than %d targets. Remove some targets.", r.Model, maxTargets)
 		}
+		targets := make(map[Target]bool)
 		for j, t := range r.Targets {
 			p, ok := providers[t.Provider]
 			switch {
@@ -271,9 +325,12 @@ func (v *validator) validateRoutes(routes []Route, providers map[string]Provider
 				v.add(v.line("routes", i, "targets", j), "A target of the route %q has no provider. Add the name of a provider.", r.Model)
 			case !ok:
 				v.add(v.line("routes", i, "targets", j, "provider"), "The provider %q is not defined. Add it to providers, or use a defined provider.", t.Provider)
-			case string(r.API) != p.Kind && knownAPI(r.API) && knownAPI(API(p.Kind)):
-				v.add(v.line("routes", i, "targets", j, "provider"), "The provider %q uses the %s format, but the route %q uses the %s format. Use a provider with the %s format.", t.Provider, p.Kind, r.Model, r.API, r.API)
+			case KindAPI(p.Kind) != "" && knownAPI(r.API) && KindAPI(p.Kind) != r.API:
+				v.add(v.line("routes", i, "targets", j, "provider"), "The provider %q uses the %s format, but the route %q uses the %s format. Use a provider with the %s format.", t.Provider, KindAPI(p.Kind), r.Model, r.API, r.API)
+			case targets[t]:
+				v.add(v.line("routes", i, "targets", j), "The route %q has the target %s/%s two times. Remove one of them.", r.Model, t.Provider, t.Model)
 			}
+			targets[t] = true
 		}
 
 		for _, d := range []struct {

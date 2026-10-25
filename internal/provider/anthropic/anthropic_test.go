@@ -1,8 +1,10 @@
 package anthropic
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ykakade/tollgate/internal/provider"
@@ -94,5 +96,21 @@ func TestNewSetsHeaders(t *testing.T) {
 		if got.Get("X-Api-Key") != tt.wantKey || got.Get("Anthropic-Version") != tt.wantVersion {
 			t.Errorf("%s: x-api-key %q, anthropic-version %q", tt.name, got.Get("X-Api-Key"), got.Get("Anthropic-Version"))
 		}
+	}
+}
+
+func TestStreamMeterMalformed(t *testing.T) {
+	m := NewStreamMeter()
+	ok := "event: ping\ndata: {\"type\":\"ping\"}\n\n"
+	if _, err := m.Write([]byte(ok)); err != nil {
+		t.Fatalf("Write(ping) error = %v", err)
+	}
+	_, err := m.Write([]byte("event: content_block_delta\ndata: {\"type\":\n\n"))
+	if !errors.Is(err, provider.ErrMalformed) {
+		t.Errorf("Write error = %v, want ErrMalformed", err)
+	}
+	m = NewStreamMeter()
+	if _, err := m.Write([]byte("data: " + strings.Repeat("x", maxEventBytes+1))); !errors.Is(err, provider.ErrMalformed) {
+		t.Errorf("large event: Write error = %v, want ErrMalformed", err)
 	}
 }

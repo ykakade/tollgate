@@ -150,7 +150,8 @@ func (a *Attempt) fire() {
 //
 // If the attempt ends early, Copy returns its cause (see Err). If a write to
 // the client fails, Copy cancels the upstream request and returns an error
-// that wraps ErrClientWrite.
+// that wraps ErrClientWrite. If meter returns an error, Copy cancels the
+// upstream request and returns that error.
 func (a *Attempt) Copy(w http.ResponseWriter, body io.Reader, meter io.Writer) (int64, error) {
 	rc := http.NewResponseController(w)
 	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
@@ -172,7 +173,10 @@ func (a *Attempt) Copy(w http.ResponseWriter, body io.Reader, meter io.Writer) (
 			}
 			written += int64(n)
 			if meter != nil {
-				_, _ = meter.Write(buf[:n])
+				if _, err := meter.Write(buf[:n]); err != nil {
+					a.cancel(err)
+					return written, fmt.Errorf("read response: %w", err)
+				}
 			}
 		}
 		if errors.Is(rerr, io.EOF) {

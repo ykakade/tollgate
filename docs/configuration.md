@@ -16,7 +16,7 @@ tollgate init > tollgate.yaml
 - Use one YAML document in the file. Tollgate refuses additional documents.
 - Durations use Go syntax, for example `500ms`, `30s` or `10m`.
 - Sizes are a number of bytes, or a number with `KiB`, `MiB` or `GiB`, for example `16MiB`.
-- If you omit a field that has a default, or set it to `0`, Tollgate uses the default.
+- If you omit a field that has a default, Tollgate uses the default. Zero also selects the default, except for `retry.budget_ratio`.
 - `tollgate config validate` shows all errors at once, each with its line number.
 
 ## Top level
@@ -32,6 +32,8 @@ tollgate init > tollgate.yaml
 | `providers` | mapping | | The upstream services, by name. |
 | `routes` | list | | One route for each model name that clients send. |
 | `tenants` | list | | The users or teams, with their keys. |
+| `retry` | mapping | | The attempt limit and retry budget. |
+| `breaker` | mapping | | The circuit breaker settings. |
 
 ## server
 
@@ -91,10 +93,10 @@ Each entry gives the prices of one model from a date:
     micro_usd_per_mtok: {input: 500000, output: 2500000}
 ```
 
-- Tollgate finds the entry of a target with the provider name first, then with the provider kind. Use the provider name for a provider with other prices, for example a local Ollama with prices of `0`.
+- Tollgate finds the entry of a target with the provider name first, then with the provider kind. Use the provider name for a provider with other prices. An `ollama` target without an entry costs 0.
 - Tollgate uses the entry with the latest `effective_from` that is not after the request. To change a price, add an entry with a new date. Do not change an old entry.
 - If a prompt has more tokens than `above_prompt_tokens`, Tollgate uses the `long_context` prices for the full request. The prompt counts the input, cache read and cache write tokens.
-- If a tenant has a budget, each target of its models must have a price. Else the configuration is not valid.
+- If a tenant has a budget, each non-Ollama target of its models must have a price. Vertex prices must be explicit.
 - If a target has no price and the tenant has no budget, the cost of its requests is 0 in the usage events.
 
 ## reservation
@@ -111,9 +113,15 @@ Each key of `providers` is a provider name. Use letters, digits, `.`, `_` and `-
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `kind` | text | none | The wire format of the provider: `anthropic` or `openai`. Use `openai` for Ollama. |
-| `base_url` | URL | `https://api.anthropic.com` for `anthropic`, `https://api.openai.com` for `openai` | The URL of the provider. Do not add `/v1`. Tollgate adds the request path, for example `/v1/messages`. |
+| `kind` | text | none | The wire format of the provider: `anthropic`, `openai`, `vertex` or `ollama`. Use `ollama` for local models. |
+| `base_url` | URL | depends on `kind` | The URL of the provider. Do not add `/v1`. Tollgate adds the request path, for example `/v1/messages`. |
+| `project` | text | none | The Google Cloud project ID. Required only for `vertex`. |
+| `region` | text | none | The Vertex location, such as `global` or `us-east5`. Required only for `vertex`. |
 | `api_key` | reference | none | The provider key, as `env:NAME` or `file:/path`. If you omit it, Tollgate sends no key, for example to a local Ollama. |
+
+The default URL is `https://api.anthropic.com` for Anthropic, `https://api.openai.com` for OpenAI, and `http://localhost:11434` for Ollama.
+Vertex derives its URL from `region`. A `base_url` override must still omit `/v1`.
+Vertex uses Google Application Default Credentials and refuses `api_key`. See [cloud targets](reliability.md#cloud-and-local-targets).
 
 Do not put a provider key in the configuration file. Tollgate refuses keys in plain text, because the file can go into version control.
 
@@ -126,7 +134,7 @@ Do not put a provider key in the configuration file. Tollgate refuses keys in pl
 | --- | --- | --- | --- |
 | `model` | text | none | The model name that clients send in the `model` field. |
 | `api` | text | none | The API format of the route: `anthropic` for `/v1/messages`, `openai` for `/v1/chat/completions`. |
-| `targets` | list | none | The provider and the model that get the request. This version supports one target. |
+| `targets` | list | none | An ordered list of 1 to 10 targets. Tollgate skips blocked targets and applies the [retry rules](reliability.md). |
 | `timeouts` | mapping | | The four timeouts of the upstream request. |
 
 Two routes can have the same `model` only if they have a different `api`.
@@ -135,7 +143,7 @@ Two routes can have the same `model` only if they have a different `api`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `provider` | text | none | The name of a provider. The `kind` of the provider must be the same as the `api` of the route. |
+| `provider` | text | none | The name of a provider. Anthropic routes accept `anthropic` and `vertex`. OpenAI routes accept `openai` and `ollama`. |
 | `model` | text | the `model` of the route | The model name that Tollgate sends to the provider. If it is different, Tollgate changes only the `model` value in the request body. |
 
 ### timeouts
@@ -147,7 +155,26 @@ Two routes can have the same `model` only if they have a different `api`.
 | `connect` | duration | `5s` | The longest time to get a connection to the provider. |
 | `first_token` | duration | `30s` | The longest time from a ready connection to the first byte of the response body. For a request that does not stream, this includes the full time of the response. |
 | `idle` | duration | `60s` | The longest time between two parts of the response body. It is also the longest time to write one part to the client. |
-| `total` | duration | `15m` | The longest time for the full request. |
+| `total` | duration | `15m` | The longest time for one upstream attempt. Each retry starts new timers. |
+
+## retry
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `max_attempts` | number | `3` | The largest number of upstream attempts per request, including the first. Use 1 to 10. |
+| `budget_ratio` | number | `0.1` | The ratio of extra attempts to recent requests, from 0 to 1. Explicit `0` retains only the floor of 10. |
+
+See [reliability](reliability.md#retry-budget) for the shared budget within one process and its window.
+
+## breaker
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `failure_ratio` | number | `0.5` | The ratio of failed attempts that opens a breaker. Use more than 0 and at most 1. |
+| `min_requests` | number | `20` | The minimum number of attempts in the recent minute before a breaker can open. Use 1 to 1000000. |
+| `open_for` | duration | `30s` | The time an open breaker refuses requests before one test attempt. |
+
+Breakers and 429 cooldowns are local to each process. See [reliability](reliability.md#circuit-breakers).
 
 ## tenants
 
@@ -222,8 +249,7 @@ providers:
     kind: anthropic
     api_key: env:ANTHROPIC_API_KEY
   local:
-    kind: openai
-    base_url: http://localhost:11434
+    kind: ollama
 
 routes:
   - model: claude-sonnet-5-5
@@ -258,4 +284,4 @@ tenants:
         mode: soft
 ```
 
-The file `./pricing.yaml` of this example must have a price for `local/qwen2.5-coder`, because the tenant has a budget.
+The `local/qwen2.5-coder` target costs 0 unless the price table has an explicit entry.

@@ -304,3 +304,72 @@ func TestUpstreamReset(t *testing.T) {
 		t.Errorf("Copy err = %v, Err() = %v; want a read error and no cause", err, a.Err())
 	}
 }
+
+var errBadStream = errors.New("bad stream")
+
+// failMeter is a meter that fails on the first write.
+type failMeter struct{}
+
+func (failMeter) Write([]byte) (int, error) { return 0, errBadStream }
+
+func TestMeterErrorCancelsUpstream(t *testing.T) {
+	upstreamDone := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "data: {\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+		close(upstreamDone)
+	}))
+	defer upstream.Close()
+
+	a, resp, err := send(t.Context(), t, http.DefaultTransport, upstream.URL, shortTimeouts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	rec := httptest.NewRecorder()
+	n, err := a.Copy(rec, resp.Body, failMeter{})
+	if !errors.Is(err, errBadStream) || n != 9 || rec.Body.String() != "data: {\n\n" {
+		t.Errorf("Copy = %d, %v, body %q; want 9, errBadStream and the chunk", n, err, rec.Body.String())
+	}
+	if !errors.Is(a.Err(), errBadStream) {
+		t.Errorf("Err() = %v, want errBadStream", a.Err())
+	}
+	select {
+	case <-upstreamDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the upstream request was not canceled")
+	}
+}
+
+// endlessBody records how far Copy reads from an unlimited upstream.
+type endlessBody struct{ read int }
+
+func (b *endlessBody) Read(p []byte) (int, error) { b.read += len(p); return len(p), nil }
+
+type blockedWriter struct {
+	net.Conn
+	header http.Header
+}
+
+func (w *blockedWriter) Header() http.Header { return w.header }
+func (*blockedWriter) WriteHeader(int)       {}
+func (*blockedWriter) Flush()                {}
+
+func TestSlowClientBoundsReads(t *testing.T) {
+	sender, receiver := net.Pipe()
+	defer sender.Close()
+	defer receiver.Close()
+	a := Start(t.Context(), shortTimeouts)
+	defer a.Stop()
+	body := &endlessBody{}
+	_, err := a.Copy(&blockedWriter{Conn: sender, header: make(http.Header)}, body, nil)
+	if !errors.Is(err, ErrClientWrite) || !errors.Is(a.Err(), ErrClientWrite) {
+		t.Fatalf("Copy error %v, cause %v", err, a.Err())
+	}
+	// Backpressure stops reads after one fixed-size buffer, even when the
+	// upstream could produce an unlimited body.
+	if body.read != bufferSize {
+		t.Fatalf("read %d bytes while blocked; want %d", body.read, bufferSize)
+	}
+}

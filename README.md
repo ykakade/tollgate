@@ -7,9 +7,12 @@ One Go binary that controls cost, rate limits, and failover for the Anthropic an
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 > [!NOTE]
-> Status: alpha. Tollgate sends requests to one provider for each model. It has no fallback yet. The configuration format can change before v1.0.
+> Status: alpha. The configuration format can change before v1.0.
 
 ## What Tollgate does
+
+- **Recovers from provider failures.** Ordered targets, retries, a retry budget, and circuit breakers apply before the first byte. See [reliability](docs/reliability.md).
+- **Supports cloud and local targets.** Use Claude on Vertex AI or local Ollama models with the same API format.
 
 - **Controls cost.** Set a budget for each tenant, for each month and for each agent session. When a hard budget has no money left, Tollgate refuses the request with status 402. See [rate limits and budgets](docs/limits.md).
 - **Limits traffic.** Set limits for requests and tokens per minute. The limits stay correct when you run more than one Tollgate copy with Redis.
@@ -110,6 +113,7 @@ To use Tollgate with Claude Code and the Anthropic API, see [examples/claude-cod
 ## Documentation
 
 - [Configuration](docs/configuration.md): each field of the configuration file
+- [Reliability](docs/reliability.md): fallback rules, breakers, cloud targets, and M3 acceptance tests
 - [Operations](docs/operations.md): start, stop, health endpoints and logs
 - [M1 validation](docs/m1-validation.md): acceptance checks and validation limits
 - [Decision records](docs/adr/): the design decisions and the reasons for them

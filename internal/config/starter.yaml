@@ -28,6 +28,15 @@ usage:
 # pricing:
 #   file: ./pricing.yaml
 
+# These defaults apply to all routes. See docs/reliability.md.
+retry:
+  max_attempts: 3
+  budget_ratio: 0.1
+breaker:
+  failure_ratio: 0.5
+  min_requests: 20
+  open_for: 30s
+
 providers:
   anthropic:
     kind: anthropic
@@ -41,6 +50,10 @@ providers:
   #   base_url: https://api.openai.com
   #   api_key: env:OPENAI_API_KEY
 
+# Add targets in fallback order. Anthropic routes accept anthropic or
+# vertex providers. OpenAI routes accept openai or ollama providers.
+# A vertex provider needs project, region, and Google credentials.
+# An ollama provider defaults to http://localhost:11434 and needs no key.
 # One route for each model name that clients send.
 # Make sure that the model names agree with the models of your client.
 routes:

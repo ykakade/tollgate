@@ -185,7 +185,7 @@ tenants:
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapters, err := NewAdapters(cfg.Providers, nil)
+	adapters, err := NewAdapters(t.Context(), cfg.Providers, AdapterOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

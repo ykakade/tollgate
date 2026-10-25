@@ -8,6 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Ordered fallback targets, retries before the first response byte, a retry budget, and circuit breakers for each provider, model, and region.
+- The `retry` and `breaker` configuration fields, 429 cooldowns from `retry-after`, and reservation at the most expensive target's estimate.
+- The `vertex` provider kind for Claude with Google Application Default Credentials, and the `ollama` kind for local models.
+- Fake provider failure scenarios, the M3 acceptance suite, a bounded-buffer test for slow clients, and a reliability guide.
+- Malformed SSE detection, partial usage on stream failures, and decision records ADR 0021 to ADR 0024.
+
 - Rate limits for requests and tokens per minute for each tenant, with a sliding-window counter and the `ratelimit-*` and `retry-after` headers.
 - Month and session budgets for each tenant, with hard and soft modes. A hard budget refuses requests with status 402 and the error type `budget_exceeded`.
 - The `limiter.Store` interface with a memory store and a Redis store. One Lua script checks and reserves all limits of a request in one Redis round trip.

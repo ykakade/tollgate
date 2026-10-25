@@ -3,7 +3,9 @@
 package anthropic
 
 import (
+	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"fmt"
 	"net/http"
 
 	"github.com/ykakade/tollgate/internal/provider"
@@ -91,6 +93,7 @@ type StreamMeter struct {
 	parser *sse.Parser
 	u      usage
 	seen   bool
+	err    error
 }
 
 // NewStreamMeter returns a new StreamMeter.
@@ -98,15 +101,29 @@ func NewStreamMeter() *StreamMeter {
 	return &StreamMeter{parser: sse.NewParser(maxEventBytes)}
 }
 
-// Write implements provider.Meter.
+// Write implements provider.Meter. An event that is too large, or an
+// event with data that is not JSON, is an error that wraps
+// provider.ErrMalformed.
 func (m *StreamMeter) Write(p []byte) (int, error) {
-	// A parse error stops the meter, and Usage then reports what it found
-	// before the error. The stream itself continues.
-	_ = m.parser.Feed(p, m.event)
+	if m.err == nil {
+		if err := m.parser.Feed(p, m.event); err != nil && m.err == nil {
+			m.err = fmt.Errorf("%w: %w", provider.ErrMalformed, err)
+		}
+	}
+	if m.err != nil {
+		return 0, m.err
+	}
 	return len(p), nil
 }
 
 func (m *StreamMeter) event(e sse.Event) {
+	if m.err != nil {
+		return
+	}
+	if !jsontext.Value(e.Data).IsValid() {
+		m.err = fmt.Errorf("%w: the data of a %q event is not JSON", provider.ErrMalformed, e.Name)
+		return
+	}
 	switch e.Name {
 	case "message_start":
 		var v struct {

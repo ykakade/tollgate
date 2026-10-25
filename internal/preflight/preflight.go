@@ -41,10 +41,16 @@ type Request struct {
 	// if the body has no limit, or a limit that is not a positive integer.
 	MaxTokens int64
 
-	body          []byte
-	objectStart   int // the offset after the "{" of the top-level object
-	model         span
+	body        []byte
+	objectStart int // the offset after the "{" of the top-level object
+	model       span
+	// modelMember is the bytes to remove to remove the model member: its
+	// name, its value and one comma.
+	modelMember   span
 	streamOptions span // zero if the body has no stream_options
+	members       int
+	// anthropicVersion is true if the body has an anthropic_version member.
+	anthropicVersion bool
 }
 
 // Decode reads the fields of body. It returns an error that wraps one of
@@ -63,12 +69,19 @@ func Decode(body []byte) (*Request, error) {
 	hasModel := false
 	var maxTokens, maxCompletion int64
 	for dec.PeekKind() != '}' {
+		// The offset is after the previous value and before its comma,
+		// or after the "{" for the first member.
+		memberStart := int(dec.InputOffset())
 		tok, err := dec.ReadToken()
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrNotJSON, err)
 		}
+		r.members++
 		// A token is valid only until the next read, so copy the name.
 		name := tok.String()
+		if name == "anthropic_version" {
+			r.anthropicVersion = true
+		}
 		switch name {
 		case "max_tokens", "max_completion_tokens":
 			v, err := dec.ReadValue()
@@ -98,6 +111,12 @@ func Decode(body []byte) (*Request, error) {
 					return nil, fmt.Errorf("%w: %w", ErrNotJSON, err)
 				}
 				r.Model, r.model, hasModel = string(m), sp, true
+				r.modelMember = span{memberStart, end}
+				if memberStart == r.objectStart {
+					// The first member has no comma before it, so remove
+					// the comma after it.
+					r.modelMember.end = commaAfter(body, end)
+				}
 			case "stream":
 				switch v.Kind() {
 				case 't':
@@ -130,6 +149,21 @@ func Decode(body []byte) (*Request, error) {
 		r.MaxTokens = maxCompletion
 	}
 	return r, nil
+}
+
+// commaAfter returns the offset after the comma that follows offset i,
+// with only white space before it. If there is no such comma, it returns i.
+func commaAfter(body []byte, i int) int {
+	for j := i; j < len(body); j++ {
+		switch body[j] {
+		case ' ', '\t', '\n', '\r':
+		case ',':
+			return j + 1
+		default:
+			return i
+		}
+	}
+	return i
 }
 
 // positiveInt returns the value of a JSON number that is a positive
@@ -177,7 +211,18 @@ func (r *Request) Rewrite(model string, includeUsage bool) ([]byte, error) {
 	if len(edits) == 0 {
 		return r.body, nil
 	}
-	slices.SortFunc(edits, func(a, b edit) int { return a.start - b.start })
+	return r.apply(edits), nil
+}
+
+// apply returns a copy of the body with the edits. Edits must not overlap.
+// At the same offset, an insert comes before a replacement.
+func (r *Request) apply(edits []edit) []byte {
+	slices.SortStableFunc(edits, func(a, b edit) int {
+		if a.start != b.start {
+			return a.start - b.start
+		}
+		return (a.end - a.start) - (b.end - b.start)
+	})
 	out := make([]byte, 0, len(r.body)+64)
 	pos := 0
 	for _, e := range edits {
@@ -185,7 +230,28 @@ func (r *Request) Rewrite(model string, includeUsage bool) ([]byte, error) {
 		out = append(out, e.text...)
 		pos = e.end
 	}
-	return append(out, r.body[pos:]...), nil
+	return append(out, r.body[pos:]...)
+}
+
+// VertexBody returns the body for Claude on Vertex AI (ADR 0024): without
+// the model member, because the URL names the model, and with an
+// anthropic_version member with the value version, if the body has no
+// anthropic_version member. Other bytes do not change.
+func (r *Request) VertexBody(version string) ([]byte, error) {
+	var edits []edit
+	if !r.anthropicVersion {
+		q, err := jsontext.AppendQuote(nil, version)
+		if err != nil {
+			return nil, fmt.Errorf("quote anthropic_version: %w", err)
+		}
+		text := `"anthropic_version":` + string(q)
+		if r.members > 1 {
+			text += ","
+		}
+		edits = append(edits, edit{span{r.objectStart, r.objectStart}, text})
+	}
+	edits = append(edits, edit{r.modelMember, ""})
+	return r.apply(edits), nil
 }
 
 const includeUsageMember = `"include_usage":true`

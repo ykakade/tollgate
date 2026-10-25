@@ -32,6 +32,7 @@ func TestRunErrors(t *testing.T) {
 		{name: "help", args: []string{"-h"}, wantErr: flag.ErrHelp},
 		{name: "unknown flag", args: []string{"-port", "1"}},
 		{name: "bad address", args: []string{"-listen", "256.0.0.1:1"}},
+		{name: "bad scenario", args: []string{"-scenario", "explode"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

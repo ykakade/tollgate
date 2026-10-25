@@ -112,6 +112,8 @@ Tollgate also writes these warnings:
 | `soft budget exceeded` | A request took a soft budget over its limit. The line has the window, the limit and the spend. |
 | `limit store failed` | A call to Redis failed. The line has the operation: `admit`, `settle` or `ping`. |
 | `settle failed` | Tollgate cannot replace the reservation of a request with its real cost. The reservation stays until the end of the period. |
+| `upstream attempt failed, trying again` | An upstream failure caused a retry or fallback. The line names the current and next targets. |
+| `circuit breaker changed` | A breaker changed state. The line names the provider, model, region, and old and new states. |
 | `usage events dropped` | At shutdown: the number of usage events that Tollgate did not write, because the queue was full or the file failed. |
 
 ## Usage file
@@ -136,3 +138,13 @@ If the provider stops or fails after Tollgate sent the first byte of a stream, T
 - OpenAI routes get a `data:` line with an `error` object.
 
 The official Anthropic and OpenAI SDKs show these events as errors. The access log keeps the usage that the provider sent before the failure.
+
+## If a request fails
+
+Read the request ID, the response headers, and the `request done` log line.
+A 502 with target names means no target could complete the request before the response started.
+A `no_target` denial means every target was blocked by a breaker, a busy test attempt, or a cooldown.
+Wait for `retry-after`, or check provider health and the [reliability settings](reliability.md).
+The last upstream error status passes through when no attempt remains.
+
+Each process keeps its own breakers, cooldowns, and retry budget. Redis shares rate limits and spend, but not this health state.

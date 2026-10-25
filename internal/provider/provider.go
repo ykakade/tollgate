@@ -8,6 +8,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -34,11 +35,17 @@ type Usage struct {
 	ReasoningTokens int64
 }
 
+// ErrMalformed is the error of a Meter when the response is not valid in
+// the wire format of the provider.
+var ErrMalformed = errors.New("malformed response")
+
 // Meter reads a copy of a response body and finds its usage. The relay
-// calls Write with each chunk that it sends to the client. Write never
-// returns an error, so a response that a meter cannot read still goes to
-// the client.
+// calls Write with each chunk after it sends the chunk to the client.
 type Meter interface {
+	// Write reads the next chunk. It returns an error that wraps
+	// ErrMalformed if the response is not valid, for example a stream
+	// event that is not JSON. The relay then stops the response. A meter
+	// that cannot find the usage for another reason returns no error.
 	Write(p []byte) (int, error)
 	// Usage returns the usage in the response. The bool is false if the
 	// response had no usage that the meter could read.
@@ -55,6 +62,11 @@ type Request struct {
 	// must not go upstream and adds the provider key.
 	Header http.Header
 	Body   []byte
+	// Model is the model of the target. Body already has it, if the
+	// format of the provider puts the model in the body.
+	Model string
+	// Stream is true if the client asked for a stream.
+	Stream bool
 }
 
 // Adapter sends requests to one provider.

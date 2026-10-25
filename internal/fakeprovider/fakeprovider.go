@@ -3,7 +3,9 @@
 //
 // The server always returns the same reply, in streaming and non-streaming
 // form, with usage fields that match the reply. Tests and benchmarks use it in
-// place of a real provider.
+// place of a real provider. A scenario makes the server fail on purpose; see
+// ScenarioHeader. The server also takes Messages API requests in the form of
+// Claude on Vertex AI.
 package fakeprovider
 
 import (
@@ -36,6 +38,9 @@ type Config struct {
 	Logger *slog.Logger
 	// Now returns the current time. If nil, the server uses time.Now.
 	Now func() time.Time
+	// Scenario is the scenario of all requests that do not send the
+	// ScenarioHeader. Empty means a normal reply.
+	Scenario string
 }
 
 // Server is a fake provider. Use New to make one.
@@ -44,6 +49,9 @@ type Server struct {
 	now    func() time.Time
 	chunks []string
 	seq    atomic.Uint64
+
+	requests atomic.Uint64
+	scenario atomic.Pointer[string]
 }
 
 // New returns a Server with the given configuration.
@@ -59,6 +67,7 @@ func New(cfg Config) *Server {
 	if s.now == nil {
 		s.now = time.Now
 	}
+	s.scenario.Store(&cfg.Scenario)
 	return s
 }
 
@@ -67,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/messages", s.handleMessages)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
+	mux.HandleFunc("POST /v1/projects/{project}/locations/{location}/publishers/anthropic/models/{action}", s.handleVertex)
 	return mux
 }
 
@@ -135,15 +145,18 @@ func writeJSON(w http.ResponseWriter, status int, v any) error {
 type eventWriter struct {
 	w  io.Writer
 	rc *http.ResponseController
+	sc scenario
+	// tokens is the number of token events written.
+	tokens int
 }
 
 // startStream writes the headers of an event stream response.
-func startStream(w http.ResponseWriter) *eventWriter {
+func startStream(w http.ResponseWriter, sc scenario) *eventWriter {
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	return &eventWriter{w: w, rc: http.NewResponseController(w)}
+	return &eventWriter{w: w, rc: http.NewResponseController(w), sc: sc}
 }
 
 // write sends one event. If name is empty, the event has no event field.
@@ -163,21 +176,46 @@ func (e *eventWriter) write(name string, data []byte) error {
 }
 
 // sseEvent is one server-sent event. The value v is sent as JSON in the data
-// field. If name is empty, the event has no event field.
+// field. If name is empty, the event has no event field. A token event holds
+// one output token.
 type sseEvent struct {
-	name string
-	v    any
+	name  string
+	v     any
+	token bool
 }
 
-// writeAll sends events in order. It stops if ctx ends.
+// writeAll sends events in order. It stops if ctx ends. It runs the
+// scenarios that fail after a number of tokens.
 func (e *eventWriter) writeAll(ctx context.Context, events []sseEvent) error {
 	for _, ev := range events {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("stop stream: %w", err)
 		}
+		if ev.token {
+			if e.tokens == e.sc.tokens {
+				if err := e.fail(ctx, ev.name); err != nil {
+					return err
+				}
+			}
+			e.tokens++
+		}
 		if err := e.writeJSON(ev.name, ev.v); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// fail runs the scenario of the stream before the next token event.
+func (e *eventWriter) fail(ctx context.Context, name string) error {
+	switch e.sc.kind {
+	case kindHangAfter:
+		<-ctx.Done()
+		return fmt.Errorf("hang: %w", ctx.Err())
+	case kindResetAfter:
+		return resetConnection(e.rc)
+	case kindMalformedAfter:
+		return e.write(name, []byte(`{"type":`))
 	}
 	return nil
 }

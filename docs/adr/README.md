@@ -26,6 +26,10 @@ Each record has a number, a status, and a date. To change a decision, write a ne
 | [0018](0018-reservation-size.md) | Reserve a capped output, and document the overspend bound | Accepted |
 | [0019](0019-rebuild-spend.md) | Rebuild the spend from the usage file at start | Accepted |
 | [0020](0020-readyz-store.md) | Keep /readyz ready when the limit store fails | Accepted |
+| [0021](0021-retry-rules.md) | Apply ordered retries before the first byte | Accepted |
+| [0022](0022-retry-budget.md) | Limit extra attempts with a local retry budget | Accepted |
+| [0023](0023-breakers.md) | Keep circuit breakers in each process | Accepted |
+| [0024](0024-cloud-adapter.md) | Use Vertex AI for the Claude cloud host | Accepted |
 
 ## Template
 

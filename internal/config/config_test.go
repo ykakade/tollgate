@@ -198,12 +198,12 @@ func TestParseErrors(t *testing.T) {
 		{"empty variable", replace(t, "env:ANTHROPIC_API_KEY", "env:EMPTY"), []string{`9: The environment variable EMPTY is not set.`}},
 		{"missing file", replace(t, "file:/keys/openai", "file:/keys/none"), []string{`13: Tollgate cannot read the file /keys/none that has the API key of the provider "openai".`}},
 		{"unknown kind", replace(t, "kind: openai\n    base_url: https://api.openai.com", "kind: gemini\n    base_url: https://api.openai.com"), []string{`11: The provider kind "gemini" is not known.`}},
-		{"later kind", replace(t, "kind: openai\n    base_url: https://api.openai.com", "kind: vertex\n    base_url: https://api.openai.com"), []string{`11: The provider kind "vertex" is not available in this version.`}},
+		{"later kind", replace(t, "kind: openai\n    base_url: https://api.openai.com", "kind: bedrock\n    base_url: https://api.openai.com"), []string{`11: The provider kind "bedrock" is not available in this version.`}},
 		{"base url with v1", replace(t, "base_url: https://api.openai.com", "base_url: https://api.openai.com/v1"), []string{"12: The base_url of the provider \"openai\" ends with /v1."}},
 		{"base url not http", replace(t, "base_url: https://api.openai.com", "base_url: ftp://x"), []string{`12: The base_url "ftp://x" is not valid.`}},
 		{"undefined provider", replace(t, "- provider: openai", "- provider: openai2"), []string{`28: The provider "openai2" is not defined.`}},
 		{"format mismatch", replace(t, "- provider: anthropic", "- provider: openai"), []string{`21: The provider "openai" uses the openai format, but the route "claude-sonnet-5-5" uses the anthropic format.`}},
-		{"two targets", replace(t, "- provider: openai\n", "- provider: openai\n      - provider: local\n"), []string{`29: The route "gpt-test" has more than one target.`}},
+		{"same target two times", replace(t, "- provider: openai\n", "- provider: openai\n      - provider: openai\n        model: gpt-test\n"), []string{`29: The route "gpt-test" has the target openai/gpt-test two times.`}},
 		{"duplicate route", replace(t, "model: gpt-test\n    api: openai", "model: local-coder\n    api: openai"), []string{
 			`29: The model "local-coder" has two openai routes.`,
 			`39: The model "gpt-test" of the tenant "personal" has no route.`,
@@ -501,5 +501,131 @@ func TestUSD(t *testing.T) {
 		if _, ok := parseUSD(in); ok {
 			t.Errorf("parseUSD(%q) ok = true, want false", in)
 		}
+	}
+}
+
+const reliabilityConfig = `version: 1
+providers:
+  anthropic:
+    kind: anthropic
+    api_key: env:ANTHROPIC_API_KEY
+  vertex-us:
+    kind: vertex
+    project: my-project-1
+    region: us-east5
+  ollama:
+    kind: ollama
+routes:
+  - model: claude-sonnet-5-5
+    api: anthropic
+    targets:
+      - provider: anthropic
+      - provider: vertex-us
+  - model: local-coder
+    api: openai
+    targets:
+      - provider: ollama
+        model: qwen
+tenants:
+  - id: personal
+    models: [claude-sonnet-5-5, local-coder]
+retry:
+  max_attempts: 4
+  budget_ratio: 0
+breaker:
+  failure_ratio: 0.25
+  min_requests: 5
+  open_for: 1m
+`
+
+func TestParseReliability(t *testing.T) {
+	cfg, err := Parse("t.yaml", []byte(reliabilityConfig), testEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(Retry{MaxAttempts: 4, BudgetRatio: 0}, cfg.Retry); diff != "" {
+		t.Errorf("retry differs (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(Breaker{FailureRatio: 0.25, MinRequests: 5, OpenFor: Duration(time.Minute)}, cfg.Breaker); diff != "" {
+		t.Errorf("breaker differs (-want +got):\n%s", diff)
+	}
+	if v := cfg.Providers["vertex-us"]; v.BaseURL != "" || v.Project != "my-project-1" || v.Region != "us-east5" {
+		t.Errorf("vertex provider = %+v", v)
+	}
+	if got := cfg.Providers["ollama"].BaseURL; got != "http://localhost:11434" {
+		t.Errorf("default ollama base_url = %q", got)
+	}
+	if len(cfg.Routes[0].Targets) != 2 {
+		t.Errorf("targets = %+v, want 2", cfg.Routes[0].Targets)
+	}
+}
+
+func TestParseReliabilityDefaults(t *testing.T) {
+	cfg, err := Parse("t.yaml", []byte("version: 1\n"), testEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(Retry{MaxAttempts: DefaultMaxAttempts, BudgetRatio: DefaultBudgetRatio}, cfg.Retry); diff != "" {
+		t.Errorf("retry differs (-want +got):\n%s", diff)
+	}
+	want := Breaker{FailureRatio: DefaultFailureRatio, MinRequests: DefaultMinRequests, OpenFor: Duration(DefaultOpenFor)}
+	if diff := cmp.Diff(want, cfg.Breaker); diff != "" {
+		t.Errorf("breaker differs (-want +got):\n%s", diff)
+	}
+}
+
+func TestParseReliabilityErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name, old, repl string
+		want            []string
+	}{
+		{"max attempts", "max_attempts: 4", "max_attempts: 11", []string{"The value of retry.max_attempts is not valid."}},
+		{"NaN budget ratio", "budget_ratio: 0", "budget_ratio: .nan", []string{"The value of retry.budget_ratio is not valid."}},
+		{"NaN failure ratio", "failure_ratio: 0.25", "failure_ratio: .nan", []string{"The value of breaker.failure_ratio is not valid."}},
+		{"budget ratio", "budget_ratio: 0", "budget_ratio: 1.5", []string{"The value of retry.budget_ratio is not valid."}},
+		{"failure ratio", "failure_ratio: 0.25", "failure_ratio: -1", []string{"The value of breaker.failure_ratio is not valid."}},
+		{"min requests", "min_requests: 5", "min_requests: -5", []string{"The value of breaker.min_requests is not valid."}},
+		{"no project", "    project: my-project-1\n", "", []string{`The vertex provider "vertex-us" has no project.`}},
+		{"bad project", "project: my-project-1", "project: My Project", []string{`The project "My Project" of the provider "vertex-us" is not a Google Cloud project ID.`}},
+		{"no region", "    region: us-east5\n", "", []string{`The vertex provider "vertex-us" has no region.`}},
+		{"bad region", "region: us-east5", "region: evil.example.com/", []string{`The region "evil.example.com/" of the provider "vertex-us" is not valid.`}},
+		{"vertex key", "    region: us-east5\n", "    region: us-east5\n    api_key: env:ANTHROPIC_API_KEY\n", []string{`The vertex provider "vertex-us" has an api_key.`}},
+		{"region on anthropic", "    api_key: env:ANTHROPIC_API_KEY\n", "    api_key: env:ANTHROPIC_API_KEY\n    region: us\n", []string{`The provider "anthropic" has a region, but only a vertex provider uses it.`}},
+		{"vertex in openai route", "      - provider: ollama", "      - provider: vertex-us", []string{`The provider "vertex-us" uses the anthropic format, but the route "local-coder" uses the openai format.`}},
+		{"too many targets", "      - provider: vertex-us\n", func() string {
+			var b strings.Builder
+			b.WriteString("      - provider: vertex-us\n")
+			for i := range 10 {
+				fmt.Fprintf(&b, "      - provider: anthropic\n        model: m%d\n", i)
+			}
+			return b.String()
+		}(), []string{`The route "claude-sonnet-5-5" has more than 10 targets.`}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(reliabilityConfig, tt.old) {
+				t.Fatalf("reliabilityConfig does not contain %q", tt.old)
+			}
+			y := strings.Replace(reliabilityConfig, tt.old, tt.repl, 1)
+			_, err := Parse("t.yaml", []byte(y), testEnv())
+			ve, ok := errors.AsType[*ValidationError](err)
+			if !ok {
+				t.Fatalf("err = %v, want a *ValidationError", err)
+			}
+			if len(ve.Errors) != len(tt.want) {
+				t.Fatalf("got %d errors, want %d:\n%s", len(ve.Errors), len(tt.want), ve.Error())
+			}
+			for i, e := range ve.Errors {
+				if !strings.HasPrefix(e.Message, tt.want[i]) {
+					t.Errorf("error %d = %q, want prefix %q", i, e.Message, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestOllamaNeedsNoPrice(t *testing.T) {
+	y := strings.Replace(reliabilityConfig, "    models: [claude-sonnet-5-5, local-coder]\n", "    models: [local-coder]\n    budgets: [{window: month, limit_usd: 5}]\n", 1)
+	if _, err := Parse("t.yaml", []byte(y), testEnv()); err != nil {
+		t.Fatal(err)
 	}
 }

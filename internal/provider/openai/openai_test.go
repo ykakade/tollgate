@@ -1,8 +1,10 @@
 package openai
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ykakade/tollgate/internal/provider"
@@ -60,5 +62,25 @@ func TestNewSetsBearer(t *testing.T) {
 		if got.Get("Authorization") != want {
 			t.Errorf("key %q: Authorization = %q, want %q", key, got.Get("Authorization"), want)
 		}
+	}
+}
+
+func TestStreamMeterMalformed(t *testing.T) {
+	for _, tt := range []struct{ name, stream string }{
+		{"data not json", "data: {\"id\":\"c\"}\n\ndata: {\"id\":\n\n"},
+		{"event too large", "data: " + strings.Repeat("x", maxEventBytes+1)},
+	} {
+		m := NewStreamMeter()
+		_, err := m.Write([]byte(tt.stream))
+		if !errors.Is(err, provider.ErrMalformed) {
+			t.Errorf("%s: Write error = %v, want ErrMalformed", tt.name, err)
+		}
+		if _, err := m.Write([]byte("data: [DONE]\n\n")); !errors.Is(err, provider.ErrMalformed) {
+			t.Errorf("%s: Write after the error = %v, want ErrMalformed again", tt.name, err)
+		}
+	}
+	m := NewStreamMeter()
+	if _, err := m.Write([]byte("data: [DONE]\n\n: comment\n\n")); err != nil {
+		t.Errorf("Write([DONE]) error = %v", err)
 	}
 }

@@ -50,6 +50,11 @@ All Tollgate documents use these words with these meanings only. If a document n
 | SSE | Server-sent events. The stream format that Anthropic and OpenAI use. |
 | STE | ASD-STE100 Simplified Technical English. The writing rules for Tollgate documents. |
 | sticky routing | To send all requests of one session to the same target. |
+| Application Default Credentials | Google credentials that a library finds from the environment, a local login, or the host identity. |
+| cooldown | The time after a 429 during which a target gets no requests. |
+| half-open | The breaker state that permits one test attempt. |
+| Ollama | A local model server with an OpenAI-compatible API. |
+| Vertex AI | The Google Cloud service that hosts Claude models. |
 | target | One provider and one model in the list of a route. |
 | tenant | A user or a team that has its own keys, limits, and budgets. |
 | total timeout | The longest time for one full upstream request. |
