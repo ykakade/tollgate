@@ -30,11 +30,8 @@ const themes: { name: Theme; label: string }[] = [
 function Logo() {
   return (
     <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="7" fill="var(--series-1)" />
-      <g fill="none" stroke="#fff" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M9 24.5V15l14-7" strokeWidth="3.5" />
-        <path d="M15 21h10m-3.5-3.5L25 21l-3.5 3.5" strokeWidth="3" />
-      </g>
+      <rect width="32" height="32" rx="7" fill="#2a78d6" />
+      <path d="M7 7h18v6h-6v12h-6V13H7Z" fill="#fff" />
     </svg>
   );
 }

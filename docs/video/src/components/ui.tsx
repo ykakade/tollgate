@@ -63,14 +63,9 @@ export const Grain: React.FC = () => {
   );
 };
 
-// The Tollgate mark from web/public/favicon.svg: a raised boom barrier and a
-// request that passes under it. `draw` animates the strokes.
+// The Tollgate mark from web/public/favicon.svg. `draw` reveals the T.
 export const Logo: React.FC<{size: number; draw?: number; glow?: number}> = ({size, draw = 1, glow = 0}) => {
-  const gate = interpolate(draw, [0, 0.6], [0, 1], clamp); // post, then boom
-  const shaft = interpolate(draw, [0.45, 0.8], [0, 1], clamp);
-  const head = interpolate(draw, [0.7, 1], [0, 1], clamp);
-  // pathLength="1" lets each stroke draw from 0 to 1 whatever its real length.
-  const stroke = (p: number) => ({pathLength: 1, strokeDasharray: 1, strokeDashoffset: 1 - p, opacity: p > 0 ? 1 : 0});
+  const opacity = interpolate(draw, [0, 1], [0, 1], clamp);
   return (
     <svg
       width={size}
@@ -78,19 +73,8 @@ export const Logo: React.FC<{size: number; draw?: number; glow?: number}> = ({si
       viewBox="0 0 32 32"
       style={{filter: glow > 0 ? `drop-shadow(0 0 ${size * 0.25 * glow}px rgba(42,120,214,${0.8 * glow}))` : undefined, overflow: 'visible'}}
     >
-      <defs>
-        <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#3b8cf0" />
-          <stop offset="1" stopColor="#1f63bd" />
-        </linearGradient>
-      </defs>
-      <rect width="32" height="32" rx="7" fill="url(#lg)" />
-      <rect x="0.5" y="0.5" width="31" height="31" rx="6.5" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
-      <g fill="none" stroke="#fff" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M9 24.5V15l14-7" strokeWidth="3.5" {...stroke(gate)} />
-        <path d="M15 21h10" strokeWidth="3" {...stroke(shaft)} />
-        <path d="M21.5 17.5L25 21l-3.5 3.5" strokeWidth="3" {...stroke(head)} />
-      </g>
+      <rect width="32" height="32" rx="7" fill="#2a78d6" />
+      <path d="M7 7h18v6h-6v12h-6V13H7Z" fill="#fff" opacity={opacity} />
     </svg>
   );
 };

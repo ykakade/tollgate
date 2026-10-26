@@ -33,16 +33,16 @@ Result: Remotion Studio opens in the browser. `Launch` is the full video, and `S
    npm run render
    ```
 
-2. Render the animated WebP for the README. GitHub does not autoplay video in a README, but it shows an animated WebP like an image. With `"still": true`, the background does not move and has no film grain, so that the frames compress well:
+2. Render the 1920×1080 animated WebP for the README. GitHub does not autoplay video in a README, but it shows an animated WebP like an image. With `"still": true`, the background does not move and has no film grain, so that the frames compress well:
 
    ```sh
    npx remotion render Launch out/web-src.mp4 --props='{"still":true}' --crf=4
-   mkdir -p out/frames
-   npx remotion ffmpeg -i out/web-src.mp4 -r 20 -vf scale=1280:720:flags=lanczos out/frames/f%04d.png
-   node scripts/webp.mjs out/frames 20 out/tollgate.webp 80
+   mkdir -p out/frames-1080p
+   npx remotion ffmpeg -i out/web-src.mp4 -r 20 -vf scale=1920:1080:flags=lanczos out/frames-1080p/f%04d.png
+   node scripts/webp.mjs out/frames-1080p 20 out/tollgate.webp 80 4
    ```
 
-   The encoding takes approximately 10 minutes.
+   The last argument sets WebP encoding effort (0–6). Effort 4 keeps the 1080p export practical; higher values can make a smaller file but take longer.
 
 3. Copy `out/tollgate.mp4` and `out/tollgate.webp` to `docs/assets/`.
 

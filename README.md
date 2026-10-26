@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/logo.svg" width="64" height="64" alt="Tollgate logo"></p>
+
 # Tollgate
 
 A lightweight AI gateway for coding agents.
