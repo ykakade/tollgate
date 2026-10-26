@@ -31,7 +31,10 @@ function Logo() {
   return (
     <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
       <rect width="32" height="32" rx="7" fill="var(--series-1)" />
-      <path d="M7 12h18M16 12v13" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" />
+      <g fill="none" stroke="#fff" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M9 24.5V15l14-7" strokeWidth="3.5" />
+        <path d="M15 21h10m-3.5-3.5L25 21l-3.5 3.5" strokeWidth="3" />
+      </g>
     </svg>
   );
 }

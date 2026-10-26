@@ -63,10 +63,14 @@ export const Grain: React.FC = () => {
   );
 };
 
-// The Tollgate mark from web/public/favicon.svg. `draw` animates the strokes.
+// The Tollgate mark from web/public/favicon.svg: a raised boom barrier and a
+// request that passes under it. `draw` animates the strokes.
 export const Logo: React.FC<{size: number; draw?: number; glow?: number}> = ({size, draw = 1, glow = 0}) => {
-  const bar = 18; // length of the top stroke in the 32-unit box
-  const stem = 13;
+  const gate = interpolate(draw, [0, 0.6], [0, 1], clamp); // post, then boom
+  const shaft = interpolate(draw, [0.45, 0.8], [0, 1], clamp);
+  const head = interpolate(draw, [0.7, 1], [0, 1], clamp);
+  // pathLength="1" lets each stroke draw from 0 to 1 whatever its real length.
+  const stroke = (p: number) => ({pathLength: 1, strokeDasharray: 1, strokeDashoffset: 1 - p, opacity: p > 0 ? 1 : 0});
   return (
     <svg
       width={size}
@@ -82,22 +86,11 @@ export const Logo: React.FC<{size: number; draw?: number; glow?: number}> = ({si
       </defs>
       <rect width="32" height="32" rx="7" fill="url(#lg)" />
       <rect x="0.5" y="0.5" width="31" height="31" rx="6.5" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
-      <path
-        d="M7 12h18"
-        stroke="#fff"
-        strokeWidth="3.5"
-        strokeLinecap="round"
-        strokeDasharray={bar}
-        strokeDashoffset={bar * (1 - interpolate(draw, [0, 0.55], [0, 1], clamp))}
-      />
-      <path
-        d="M16 12v13"
-        stroke="#fff"
-        strokeWidth="3.5"
-        strokeLinecap="round"
-        strokeDasharray={stem}
-        strokeDashoffset={stem * (1 - interpolate(draw, [0.45, 1], [0, 1], clamp))}
-      />
+      <g fill="none" stroke="#fff" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M9 24.5V15l14-7" strokeWidth="3.5" {...stroke(gate)} />
+        <path d="M15 21h10" strokeWidth="3" {...stroke(shaft)} />
+        <path d="M21.5 17.5L25 21l-3.5 3.5" strokeWidth="3" {...stroke(head)} />
+      </g>
     </svg>
   );
 };
