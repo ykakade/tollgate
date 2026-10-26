@@ -5,3 +5,5 @@ data
 *.jsonl
 
 web/node_modules
+docs/video/node_modules
+docs/video/out

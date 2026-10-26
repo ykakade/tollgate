@@ -10,9 +10,9 @@ One Go binary that controls cost, rate limits, and failover for the Anthropic an
 > [!NOTE]
 > Status: alpha. The configuration format can change before v1.0.
 
-![Claude Code sends a request through Tollgate. The primary provider fails, Tollgate sends the request to the backup, and the dashboard shows the spend.](docs/assets/demo.gif)
+<a href="docs/assets/tollgate.mp4"><img src="docs/assets/tollgate.webp" width="100%" alt="Tollgate in 37 seconds. The primary provider fails with status 529 and Tollgate sends the request to the backup with 89 microseconds of overhead. A hard budget refuses a request with status 402. The dashboard shows spend and fallbacks."></a>
 
-The demo uses fake providers. Run `make demo-gif` to record it again. See [docs/demo](docs/demo/).
+<p align="center"><a href="docs/assets/tollgate.mp4">Watch in 1080p (MP4)</a> · <a href="#a-real-run">See a real run</a> · <a href="docs/video/">How the video is made</a></p>
 
 ## What Tollgate does
 
@@ -38,6 +38,14 @@ The demo uses fake providers. Run `make demo-gif` to record it again. See [docs/
 </picture>
 
 The screenshot uses synthetic demo data. Run `make dashboard-demo` to reproduce the demo.
+
+## A real run
+
+Claude Code sends a request through Tollgate. The primary provider fails, Tollgate sends the request to the backup, and the dashboard shows the spend.
+
+![Claude Code sends a request through Tollgate. The primary provider fails, Tollgate sends the request to the backup, and the dashboard shows the spend.](docs/assets/demo.gif)
+
+The demo uses fake providers. Run `make demo-gif` to record it again. See [docs/demo](docs/demo/).
 
 ## Install
 

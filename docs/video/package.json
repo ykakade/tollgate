@@ -1,0 +1,27 @@
+{
+  "name": "tollgate-video",
+  "private": true,
+  "version": "0.0.0",
+  "description": "The Tollgate launch video, made with Remotion. See README.md.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render Launch out/tollgate.mp4",
+    "still": "remotion still Launch out/still.png"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.538",
+    "@remotion/google-fonts": "4.0.538",
+    "@remotion/paths": "4.0.538",
+    "@remotion/shapes": "4.0.538",
+    "@remotion/transitions": "4.0.538",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.538"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "sharp": "0.34.5",
+    "typescript": "5.9.3"
+  }
+}

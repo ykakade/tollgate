@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- A launch video at the top of the README, made with Remotion from real Tollgate output and dashboard screenshots. The source is in `docs/video`.
+
 ## [0.1.0] - 2026-10-25
 
 ### Added
