@@ -4,7 +4,7 @@ This example sends the requests of Claude Code through Tollgate.
 
 Prerequisites:
 
-- Tollgate. See [Build from source](../../README.md#build-from-source).
+- Tollgate. See [Build from source](../../docs/quickstart.md#build-from-source).
 - Claude Code.
 - An Anthropic API key.
 

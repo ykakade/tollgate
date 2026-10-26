@@ -1,54 +1,80 @@
 import React from 'react';
-import {AbsoluteFill, Composition, interpolate} from 'remotion';
+import {AbsoluteFill, Composition, interpolate, useCurrentFrame} from 'remotion';
 import {linearTiming, TransitionSeries} from '@remotion/transitions';
 import type {TransitionPresentation, TransitionPresentationComponentProps} from '@remotion/transitions';
-import {easeInOut} from './components/ui';
-import {FPS} from './theme';
-import {Hook} from './scenes/Hook';
-import {Reveal} from './scenes/Reveal';
+import {clamp, easeInOut, Logo} from './components/ui';
+import {c, font, FPS} from './theme';
+import {Open} from './scenes/Open';
+import {Architecture} from './scenes/Architecture';
+import {Pipeline} from './scenes/Pipeline';
 import {Failover} from './scenes/Failover';
-import {Stat} from './scenes/Stat';
+import {Resilience} from './scenes/Resilience';
 import {Budget} from './scenes/Budget';
+import {Agents} from './scenes/Agents';
+import {Observability} from './scenes/Observability';
 import {Dashboard} from './scenes/Dashboard';
-import {Features} from './scenes/Features';
+import {Quality} from './scenes/Quality';
 import {End} from './scenes/End';
 
-// Zoom-blur transition: the old scene pushes toward the viewer and blurs out,
-// the new one settles in from slightly smaller.
-const ZoomBlur: React.FC<TransitionPresentationComponentProps<Record<string, never>>> = ({children, presentationDirection, presentationProgress}) => {
+// Rise transition: the old scene moves up and fades, the new one rises in.
+// It has no blur, so that text stays sharp in the README WebP.
+const Rise: React.FC<TransitionPresentationComponentProps<Record<string, never>>> = ({children, presentationDirection, presentationProgress}) => {
   const p = presentationProgress;
   const entering = presentationDirection === 'entering';
-  const scale = entering ? interpolate(p, [0, 1], [0.92, 1]) : interpolate(p, [0, 1], [1, 1.12]);
-  const blur = entering ? (1 - p) * 18 : p * 18;
+  const y = entering ? (1 - p) * 60 : -p * 60;
   const opacity = entering ? p : 1 - p;
-  return <AbsoluteFill style={{transform: `scale(${scale})`, filter: `blur(${blur}px)`, opacity}}>{children}</AbsoluteFill>;
+  return <AbsoluteFill style={{transform: `translateY(${y}px)`, opacity}}>{children}</AbsoluteFill>;
 };
-const zoomBlur = (): TransitionPresentation<Record<string, never>> => ({component: ZoomBlur, props: {}});
+const rise = (): TransitionPresentation<Record<string, never>> => ({component: Rise, props: {}});
 
-const T = 20;
+const T = 18;
 const scenes: [React.FC, number][] = [
-  [Hook, 210],
-  [Reveal, 190],
+  [Open, 250],
+  [Architecture, 380],
+  [Pipeline, 980],
   [Failover, 470],
-  [Stat, 170],
-  [Budget, 340],
-  [Dashboard, 430],
-  [Features, 230],
-  [End, 300],
+  [Resilience, 450],
+  [Budget, 360],
+  [Agents, 450],
+  [Observability, 400],
+  [Dashboard, 660],
+  [Quality, 330],
+  [End, 330],
 ];
+const starts = scenes.map((_, i) => scenes.slice(0, i).reduce((s, [, d]) => s + d - T, 0));
 const total = scenes.reduce((s, [, d]) => s + d, 0) - (scenes.length - 1) * T;
 
+// The mark at the top right and a progress line at the bottom, on all
+// scenes except the first and the last.
+const Overlay: React.FC = () => {
+  const frame = useCurrentFrame();
+  const a = starts[1];
+  const b = starts[scenes.length - 1] + T;
+  const o = interpolate(frame, [a, a + T, b - T, b], [0, 1, 1, 0], clamp);
+  if (o <= 0) return null;
+  return (
+    <AbsoluteFill style={{opacity: o, pointerEvents: 'none'}}>
+      <div style={{position: 'absolute', right: 120, top: 40, display: 'flex', alignItems: 'center', gap: 14}}>
+        <Logo size={44} />
+        <span style={{fontFamily: font, fontSize: 34, fontWeight: 800, letterSpacing: '-0.03em', color: c.text}}>Tollgate</span>
+      </div>
+      <div style={{position: 'absolute', left: 0, bottom: 0, height: 6, width: `${(frame / total) * 100}%`, background: `linear-gradient(90deg, ${c.blue}, ${c.blueLight})`}} />
+    </AbsoluteFill>
+  );
+};
+
 const Launch: React.FC = () => (
-  <TransitionSeries>
-    {scenes.flatMap(([Scene, d], i) => [
-      <TransitionSeries.Sequence key={`s${i}`} durationInFrames={d}>
-        <Scene />
-      </TransitionSeries.Sequence>,
-      ...(i < scenes.length - 1
-        ? [<TransitionSeries.Transition key={`t${i}`} presentation={zoomBlur()} timing={linearTiming({durationInFrames: T, easing: easeInOut})} />]
-        : []),
-    ])}
-  </TransitionSeries>
+  <AbsoluteFill style={{backgroundColor: c.bg}}>
+    <TransitionSeries>
+      {scenes.flatMap(([Scene, d], i) => [
+        <TransitionSeries.Sequence key={`s${i}`} durationInFrames={d}>
+          <Scene />
+        </TransitionSeries.Sequence>,
+        ...(i < scenes.length - 1 ? [<TransitionSeries.Transition key={`t${i}`} presentation={rise()} timing={linearTiming({durationInFrames: T, easing: easeInOut})} />] : []),
+      ])}
+    </TransitionSeries>
+    <Overlay />
+  </AbsoluteFill>
 );
 
 export const Root: React.FC = () => (

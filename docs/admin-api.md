@@ -12,7 +12,7 @@ A listener outside loopback requires that token. Static dashboard files contain 
 The dashboard prompts for the token and stores it in `sessionStorage` for the browser tab.
 Use HTTPS through a trusted reverse proxy for remote access. Tollgate does not terminate TLS on this port.
 
-Prerequisites: a built binary and a valid configuration. See [quick start](../README.md#quick-start-with-the-fake-provider).
+Prerequisites: a built binary and a valid configuration. See [quick start](quickstart.md#send-a-first-request).
 
 1. Start Tollgate:
 
@@ -117,16 +117,16 @@ For local UI development, `cd web && npm run dev` uses the Vite proxy configurat
 These screenshots use synthetic demo history and fake providers. They show no production traffic or measured live-provider savings.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/dashboard-overview-dark.png">
-  <img alt="Dashboard overview with spend, requests and cache use" src="assets/dashboard-overview-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/dashboard-overview-dark.png">
+  <img alt="Dashboard overview with spend, requests and cache use" src="./assets/dashboard-overview-light.png">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/dashboard-session-dark.png">
-  <img alt="Session spend, projection and request timeline" src="assets/dashboard-session-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/dashboard-session-dark.png">
+  <img alt="Session spend, projection and request timeline" src="./assets/dashboard-session-light.png">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/dashboard-providers-dark.png">
-  <img alt="Provider breaker states and time to first token" src="assets/dashboard-providers-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/dashboard-providers-dark.png">
+  <img alt="Provider breaker states and time to first token" src="./assets/dashboard-providers-light.png">
 </picture>

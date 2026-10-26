@@ -6,8 +6,12 @@
   "license": "Apache-2.0",
   "scripts": {
     "studio": "remotion studio",
-    "render": "remotion render Launch out/tollgate.mp4",
-    "still": "remotion still Launch out/still.png"
+    "render": "npm run render:frames && npm run encode:mp4 && npm run encode:webp",
+    "still": "remotion still Launch out/still.png",
+    "typecheck": "tsc --noEmit",
+    "render:frames": "remotion render Launch out/launch-frames --sequence --image-format=png --props='{\"still\":true}'",
+    "encode:mp4": "remotion ffmpeg -framerate 60 -i out/launch-frames/element-%04d.png -c:v libx264 -crf 16 -preset slow -pix_fmt yuv420p -movflags +faststart -y out/tollgate.mp4",
+    "encode:webp": "node scripts/webp.mjs out/launch-frames 20 out/tollgate.webp 90 4 3"
   },
   "dependencies": {
     "@remotion/cli": "4.0.538",

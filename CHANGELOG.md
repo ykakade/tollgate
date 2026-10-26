@@ -8,11 +8,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- A searchable VitePress documentation site, a quick start guide, and documentation build and deployment commands.
 - A launch video at the top of the README, made with Remotion from real Tollgate output and dashboard screenshots. The source is in `docs/video`.
 
 ### Changed
 
-- A new icon: a raised boom barrier with a request that passes under it. The dashboard, its favicon and the launch video use it.
+- A shorter README with feature comparisons, a first demo, and direct links to the guides.
+- An 81-second feature tour, sharp 1080p exports, and light and dark dashboard screenshots with the current logo.
+- A simplified T mark shared by the dashboard, favicon, documentation, and feature video.
 
 ## [0.1.0] - 2026-10-25
 

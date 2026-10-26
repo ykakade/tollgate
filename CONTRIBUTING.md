@@ -50,6 +50,8 @@ If a check fails, run `make help` to see the target for that check, and run it a
 After dashboard changes, run `make web` and commit `web/dist` with its source. CI runs `make web-check`.
 Run `make replay` only when the replay model changes, and update the published results in `docs/agent-features.md`.
 
+For documentation changes, run `make docs` to build the site and check page links. Use `make docs-serve` to read it locally.
+
 ## Commits
 
 - Use [Conventional Commits](https://www.conventionalcommits.org): `feat:`, `fix:`, `docs:`, `test:`, `chore:`.

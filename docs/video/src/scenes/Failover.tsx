@@ -1,18 +1,18 @@
 import React from 'react';
 import {AbsoluteFill, interpolate, useCurrentFrame} from 'remotion';
 import {getLength, getPointAtLength} from '@remotion/paths';
-import {Background, Card, clamp, Cursor, ease, Eyebrow, Logo, Pill, shake, Terminal, typed, useSpring, Words} from '../components/ui';
+import {Background, Card, clamp, Cursor, ease, Logo, Pill, SceneTitle, shake, Terminal, typed, useSpring} from '../components/ui';
 import {c, font, monoFont} from '../theme';
 
 // Positions of the diagram nodes.
-const AGENT = {x: 330, y: 470};
-const GATE = {x: 960, y: 470};
-const PRIMARY = {x: 1590, y: 345};
-const BACKUP = {x: 1590, y: 595};
+const AGENT = {x: 380, y: 480};
+const GATE = {x: 960, y: 480};
+const PRIMARY = {x: 1570, y: 365};
+const BACKUP = {x: 1570, y: 615};
 
-const pAgentGate = `M ${AGENT.x + 210} ${AGENT.y} L ${GATE.x - 100} ${GATE.y}`;
-const pGatePrimary = `M ${GATE.x + 100} ${GATE.y} C ${GATE.x + 300} ${GATE.y}, ${PRIMARY.x - 420} ${PRIMARY.y}, ${PRIMARY.x - 200} ${PRIMARY.y}`;
-const pGateBackup = `M ${GATE.x + 100} ${GATE.y} C ${GATE.x + 300} ${GATE.y}, ${BACKUP.x - 420} ${BACKUP.y}, ${BACKUP.x - 200} ${BACKUP.y}`;
+const pAgentGate = `M ${AGENT.x + 260} ${AGENT.y} L ${GATE.x - 100} ${GATE.y}`;
+const pGatePrimary = `M ${GATE.x + 100} ${GATE.y} C ${GATE.x + 300} ${GATE.y}, ${PRIMARY.x - 420} ${PRIMARY.y}, ${PRIMARY.x - 220} ${PRIMARY.y}`;
+const pGateBackup = `M ${GATE.x + 100} ${GATE.y} C ${GATE.x + 300} ${GATE.y}, ${BACKUP.x - 420} ${BACKUP.y}, ${BACKUP.x - 220} ${BACKUP.y}`;
 
 // Timeline, in frames.
 const T = {
@@ -39,12 +39,7 @@ export const Failover: React.FC = () => {
   return (
     <AbsoluteFill>
       <Background />
-      <AbsoluteFill style={{padding: '78px 120px'}}>
-        <Eyebrow n="01" text="Failover" />
-        <div style={{marginTop: 18}}>
-          <Words text="Primary down? Tollgate fails over." size={68} weight={700} delay={6} highlight={{fails: c.blueLight, 'over': c.blueLight}} />
-        </div>
-      </AbsoluteFill>
+      <SceneTitle n="03" label="Failover" title="Primary down? Tollgate fails over." highlight={{fails: c.blueLight, over: c.blueLight}} />
 
       <AbsoluteFill style={{transform: `translate(${s.x}px, ${s.y}px)`}}>
         <svg width={1920} height={1080} style={{position: 'absolute', inset: 0}}>
@@ -57,9 +52,9 @@ export const Failover: React.FC = () => {
           <Stream />
         </svg>
 
-        <Node x={AGENT.x} y={AGENT.y} w={440} delay={4}>
+        <Node x={AGENT.x} y={AGENT.y} w={520} delay={4}>
           <Label>Claude Code</Label>
-          <div style={{fontFamily: monoFont, fontSize: 20, color: c.muted, marginTop: 12, minHeight: 64, lineHeight: 1.5}}>
+          <div style={{fontFamily: monoFont, fontSize: 26, color: c.muted, marginTop: 12, minHeight: 120, lineHeight: 1.45}}>
             <span style={{color: c.blueLight}}>$</span> {typed('claude -p "Say hello"', frame, 14, 40)}
             <br />
             <span style={{color: c.text}}>{typed('Hello from the Tollgate fake provider.', frame, T.reply, 34)}</span>
@@ -68,19 +63,19 @@ export const Failover: React.FC = () => {
 
         <GateNode />
 
-        <Node x={PRIMARY.x} y={PRIMARY.y} w={400} delay={10} tint={failed ? c.critical : undefined} jolt={T.fail}>
+        <Node x={PRIMARY.x} y={PRIMARY.y} w={440} delay={10} tint={failed ? c.critical : undefined} jolt={T.fail}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <Label>primary</Label>
             <Status at={T.fail} color={c.critical} text="529" />
           </div>
-          <Sub>anthropic · claude-sonnet-5-5</Sub>
+          <Sub>claude-sonnet-5-5</Sub>
         </Node>
-        <Node x={BACKUP.x} y={BACKUP.y} w={400} delay={14} tint={ok ? c.good : undefined}>
+        <Node x={BACKUP.x} y={BACKUP.y} w={440} delay={14} tint={ok ? c.good : undefined}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <Label>backup</Label>
             <Status at={T.ok} color={c.good} text="200" />
           </div>
-          <Sub>anthropic · claude-sonnet-5-5</Sub>
+          <Sub>claude-sonnet-5-5</Sub>
         </Node>
       </AbsoluteFill>
 
@@ -131,7 +126,7 @@ const Packet: React.FC<{d: string; range: number[]; color: string}> = ({d, range
 const Stream: React.FC = () => {
   const frame = useCurrentFrame();
   if (frame < T.streamStart) return null;
-  const back = `M ${BACKUP.x - 200} ${BACKUP.y} C ${BACKUP.x - 420} ${BACKUP.y}, ${GATE.x + 300} ${GATE.y}, ${GATE.x + 100} ${GATE.y} L ${GATE.x - 100} ${GATE.y} L ${AGENT.x + 210} ${AGENT.y}`;
+  const back = `M ${BACKUP.x - 220} ${BACKUP.y} C ${BACKUP.x - 420} ${BACKUP.y}, ${GATE.x + 300} ${GATE.y}, ${GATE.x + 100} ${GATE.y} L ${GATE.x - 100} ${GATE.y} L ${AGENT.x + 260} ${AGENT.y}`;
   const len = getLength(back);
   const dots = [];
   for (let i = 0; i < 14; i++) {
@@ -171,16 +166,16 @@ const GateNode: React.FC = () => {
     <div style={{position: 'absolute', left: GATE.x - 100, top: GATE.y - 100, width: 200, height: 200, transform: `scale(${p})`}}>
       <div style={{position: 'absolute', inset: -26, borderRadius: 60, border: `2px solid ${c.blueLight}`, opacity: 0.25 + pulse * 0.5, transform: `rotate(${spin}deg)`, borderStyle: 'dashed'}} />
       <Logo size={200} glow={0.8 + pulse * 0.6} />
-      <div style={{position: 'absolute', top: 222, width: 400, left: -100, textAlign: 'center', fontFamily: font, fontWeight: 700, fontSize: 30, color: c.text}}>Tollgate</div>
+      <div style={{position: 'absolute', top: 222, width: 400, left: -100, textAlign: 'center', fontFamily: font, fontWeight: 700, fontSize: 36, color: c.text}}>Tollgate</div>
       <div
         style={{
           position: 'absolute',
-          top: 266,
+          top: 272,
           width: 400,
           left: -100,
           textAlign: 'center',
           fontFamily: monoFont,
-          fontSize: 20,
+          fontSize: 28,
           color: c.warning,
           opacity: reroute ? 1 : 0,
         }}
@@ -194,17 +189,17 @@ const GateNode: React.FC = () => {
 const Status: React.FC<{at: number; color: string; text: string}> = ({at, color, text}) => {
   const p = useSpring(at, {damping: 10, stiffness: 200});
   return (
-    <Pill color={color} style={{fontSize: 24, transform: `scale(${p})`, opacity: p > 0.01 ? 1 : 0, fontWeight: 700}}>
+    <Pill color={color} style={{fontSize: 30, transform: `scale(${p})`, opacity: p > 0.01 ? 1 : 0, fontWeight: 700}}>
       {text}
     </Pill>
   );
 };
 
 const Label: React.FC<{children: React.ReactNode}> = ({children}) => (
-  <div style={{fontFamily: font, fontSize: 32, fontWeight: 700, color: c.text, letterSpacing: '-0.02em'}}>{children}</div>
+  <div style={{fontFamily: font, fontSize: 36, fontWeight: 700, color: c.text, letterSpacing: '-0.02em'}}>{children}</div>
 );
 const Sub: React.FC<{children: React.ReactNode}> = ({children}) => (
-  <div style={{fontFamily: monoFont, fontSize: 19, color: c.muted, marginTop: 8}}>{children}</div>
+  <div style={{fontFamily: monoFont, fontSize: 25, color: c.muted, marginTop: 8}}>{children}</div>
 );
 
 // The real log lines, through jq, as in docs/demo/demo.tape.
@@ -235,13 +230,13 @@ const LogPanel: React.FC = () => {
     return {opacity: q, transform: `translateX(${(1 - q) * -20}px)`, whiteSpace: 'nowrap' as const};
   };
   return (
-    <div style={{position: 'absolute', left: 120, right: 120, top: 760, opacity: p, transform: `translateY(${(1 - p) * 60}px)`}}>
+    <div style={{position: 'absolute', left: 120, right: 120, top: 790, opacity: p, transform: `translateY(${(1 - p) * 60}px)`}}>
       <Terminal title="tollgate.log" style={{}}>
-        <div style={{fontSize: 22, whiteSpace: 'nowrap'}}>
+        <div style={{fontSize: 26, whiteSpace: 'nowrap'}}>
           <span style={{color: c.blueLight}}>$</span> {cmd}
           {!show1 && <Cursor />}
         </div>
-        <div style={{fontSize: 22, minHeight: 36, ...lineIn(T.log1)}}>
+        <div style={{fontSize: 26, minHeight: 42, ...lineIn(T.log1)}}>
           {show1 && (
             <>
               {'{'}
@@ -253,7 +248,7 @@ const LogPanel: React.FC = () => {
             </>
           )}
         </div>
-        <div style={{fontSize: 22, minHeight: 36, ...lineIn(T.log2)}}>
+        <div style={{fontSize: 26, minHeight: 42, ...lineIn(T.log2)}}>
           {show2 && (
             <>
               {'{'}

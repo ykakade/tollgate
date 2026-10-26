@@ -80,6 +80,22 @@ export const Logo: React.FC<{size: number; draw?: number; glow?: number}> = ({si
 };
 
 // Small uppercase section label, for example "01 · Failover".
+// Scene heading: a numbered label and a headline, at the top left.
+export const SceneTitle: React.FC<{n: string; label: string; title: string; highlight?: Record<string, string>; delay?: number}> = ({
+  n,
+  label,
+  title,
+  highlight,
+  delay = 0,
+}) => (
+  <div style={{position: 'absolute', left: 120, top: 92, right: 120}}>
+    <Eyebrow n={n} text={label} delay={delay} />
+    <div style={{marginTop: 16}}>
+      <Words text={title} size={70} weight={700} delay={delay + 6} stagger={3} highlight={highlight} />
+    </div>
+  </div>
+);
+
 export const Eyebrow: React.FC<{n: string; text: string; delay?: number; color?: string}> = ({n, text, delay = 0, color = c.blueLight}) => {
   const p = useSpring(delay);
   return (
@@ -89,8 +105,8 @@ export const Eyebrow: React.FC<{n: string; text: string; delay?: number; color?:
         alignItems: 'center',
         gap: 14,
         fontFamily: monoFont,
-        fontSize: 22,
-        letterSpacing: '0.18em',
+        fontSize: 28,
+        letterSpacing: '0.16em',
         textTransform: 'uppercase',
         color: c.muted,
         opacity: p,
@@ -176,9 +192,9 @@ export const Terminal: React.FC<{title?: string; style?: React.CSSProperties; ch
       {['#ff5f57', '#febc2e', '#28c840'].map((col) => (
         <div key={col} style={{width: 14, height: 14, borderRadius: 7, background: col, opacity: 0.9}} />
       ))}
-      <div style={{flex: 1, textAlign: 'center', fontFamily: monoFont, fontSize: 18, color: c.muted, marginRight: 62}}>{title}</div>
+      <div style={{flex: 1, textAlign: 'center', fontFamily: monoFont, fontSize: 24, color: c.muted, marginRight: 62}}>{title}</div>
     </div>
-    <div style={{padding: '22px 28px', fontFamily: monoFont, fontSize: 24, lineHeight: 1.6, color: c.text}}>{children}</div>
+    <div style={{padding: '24px 30px', fontFamily: monoFont, fontSize: 28, lineHeight: 1.6, color: c.text}}>{children}</div>
   </Card>
 );
 

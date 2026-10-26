@@ -47,7 +47,7 @@ Each Tollgate copy has its own breakers, so add the `instance` label when you co
 
 Use these PromQL queries as a start:
 
-```promql
+```text
 # Requests per second for each route
 sum by (route) (rate(tollgate_requests_total[5m]))
 

@@ -1,101 +1,70 @@
-<p align="center"><img src="docs/assets/logo.svg" width="64" height="64" alt="Tollgate logo"></p>
+<p align="center">
+  <img src="docs/assets/logo.svg" width="88" height="88" alt="Tollgate logo">
+</p>
+<h1 align="center">Tollgate</h1>
+<p align="center"><strong>Cost controls and reliable model access for coding agents.</strong></p>
+<p align="center">One Go binary. Native Anthropic and OpenAI APIs. An embedded dashboard.</p>
 
-# Tollgate
+<p align="center">
+  <a href="https://github.com/ykakade/tollgate/actions/workflows/ci.yml"><img src="https://github.com/ykakade/tollgate/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/ykakade/tollgate/releases/latest"><img src="https://img.shields.io/github/v/release/ykakade/tollgate" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 license"></a>
+</p>
 
-A lightweight AI gateway for coding agents.
-One Go binary that controls cost, rate limits, and failover for the Anthropic and OpenAI APIs.
+<p align="center">
+  <a href="docs/README.md"><strong>Documentation</strong></a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/assets/tollgate.mp4">Watch the demo</a> ·
+  <a href="docs/adr/README.md">Design decisions</a>
+</p>
 
-[![CI](https://github.com/ykakade/tollgate/actions/workflows/ci.yml/badge.svg)](https://github.com/ykakade/tollgate/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/ykakade/tollgate)](https://github.com/ykakade/tollgate/releases/latest)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+<a href="docs/assets/tollgate.mp4"><img src="docs/assets/tollgate.webp" width="100%" alt="Tollgate feature tour: request controls, provider failover, circuit breakers, budgets, agent sessions, traces, and the embedded dashboard."></a>
+
+<p align="center"><a href="docs/assets/tollgate.mp4">Watch the full 81-second tour in 1080p</a> · <a href="docs/video/README.md">Video source and reproduction</a></p>
+
+Tollgate sits between your agents and model providers. It checks keys, reserves budgets, applies rate limits, and routes requests to healthy targets. Each request records token usage and cost.
+
+Use it when several agents share an API account, a task needs its own budget, or provider failures interrupt work.
 
 > [!NOTE]
-> Status: alpha. The configuration format can change before v1.0.
+> **Alpha software.** The configuration format can change before v1.0. See [budget tolerances](docs/limits.md#reserve-and-settle) before deployment.
 
-<a href="docs/assets/tollgate.mp4"><img src="docs/assets/tollgate.webp" width="100%" alt="Tollgate in 37 seconds. The primary provider fails with status 529 and Tollgate sends the request to the backup with 89 microseconds of overhead. A hard budget refuses a request with status 402. The dashboard shows spend and fallbacks."></a>
+## Features
 
-<p align="center"><a href="docs/assets/tollgate.mp4">Watch in 1080p (MP4)</a> · <a href="#a-real-run">See a real run</a> · <a href="docs/video/">How the video is made</a></p>
+| Capability | What you get |
+| --- | --- |
+| **Cost controls** | Tenant, monthly, and session budgets. Hard budgets refuse requests with HTTP 402. Optional stream cutoffs reduce overspend. |
+| **Provider resilience** | Ordered fallbacks, bounded retries, circuit breakers, and separate connect, first-token, idle, and total timeouts. |
+| **Agent sessions** | Explicit or derived session IDs, spend projections, and sticky routing that helps preserve warm provider caches. |
+| **Traffic controls** | Request and token limits per tenant. Multiple gateway copies share atomic counters through Redis. |
+| **Privacy and caching** | Opt-in personal data redaction, response placeholder restoration, and an exact response cache scoped by tenant. |
+| **Native APIs** | Anthropic `/v1/messages` and OpenAI `/v1/chat/completions`, with streaming. Anthropic, OpenAI, Vertex AI, and Ollama targets. |
+| **Built-in visibility** | A React dashboard, JSONL cost records, Prometheus metrics, and OpenTelemetry traces for each upstream attempt. |
 
-## What Tollgate does
+Streams pass through byte for byte unless redaction or a budget cutoff changes them. Fallbacks apply before the first response byte. See the [agent guide](docs/agent-features.md) and [reliability guide](docs/reliability.md) for exact behavior.
 
-- **Tracks agent sessions.** Session budgets, approximate stream cutoffs, sticky provider selection, cache cost reports, an opt-in response cache and personal data redaction. See [agent features](docs/agent-features.md).
-- **Includes a dashboard.** Overview, sessions, providers and keys, in light and dark mode, served by the same binary. See [admin API and dashboard](docs/admin-api.md).
-- **Recovers from provider failures.** Ordered targets, retries, a retry budget, and circuit breakers apply before the first byte. See [reliability](docs/reliability.md).
-- **Supports cloud and local targets.** Use Claude on Vertex AI or local Ollama models with the same API format.
+## How it works
 
-- **Controls cost.** Set a budget for each tenant, for each month and for each agent session. When a hard budget has no money left, Tollgate refuses the request with status 402. See [rate limits and budgets](docs/limits.md).
-- **Limits traffic.** Set limits for requests and tokens per minute. The limits stay correct when you run more than one Tollgate copy with Redis.
-- **Records the cost of each request.** Tollgate calculates the cost from a price table, and writes one usage event for each request to a JSONL file. A restart keeps the spend of the month.
-- **Uses native API formats.** Anthropic `/v1/messages` and OpenAI `/v1/chat/completions` retain their provider format. Without opt-in redaction or a budget cutoff, streams pass through byte for byte.
-- **Uses its own keys.** Clients send a Tollgate key. Tollgate stores only the hash of the key, and sends the provider key from the environment.
-- **Records the tokens of each request.** Tollgate reads the usage from each response, with cache tokens, and writes one JSON log line for each request.
-- **Stops slow providers.** Each route has a connect, first-token, idle and total timeout.
-- **Does not cut streams at shutdown.** On `SIGTERM`, Tollgate refuses new requests and lets open streams finish.
-- **Stops upstream requests that nobody reads.** If the client disconnects, Tollgate cancels the request to the provider.
-- **Shows what happens.** Prometheus metrics, OpenTelemetry traces with a span for each upstream attempt, and a Grafana dashboard. See [observability](docs/observability.md).
+```text
+Claude Code / SDK / agent
+          │  Tollgate key + native API request
+          ▼
+       Tollgate
+       ├── Authenticate → inspect → reserve limits and budget
+       ├── Check response cache → route → stream → settle cost
+       └── Dashboard · usage records · metrics · traces
+          │
+          ▼
+Anthropic / OpenAI / Vertex AI / Ollama
+```
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/dashboard-overview-dark.png">
-  <img alt="Tollgate dashboard with synthetic demo data" src="docs/assets/dashboard-overview-light.png">
-</picture>
+Use the memory store for one process, or Redis for shared limits and budgets. The dashboard ships inside the binary; Node.js is needed only to rebuild its assets.
 
-The screenshot uses synthetic demo data. Run `make dashboard-demo` to reproduce the demo.
+## Quick start
 
-## A real run
+**Goal:** run the dashboard with synthetic traffic, without a provider key.
 
-Claude Code sends a request through Tollgate. The primary provider fails, Tollgate sends the request to the backup, and the dashboard shows the spend.
-
-![Claude Code sends a request through Tollgate. The primary provider fails, Tollgate sends the request to the backup, and the dashboard shows the spend.](docs/assets/demo.gif)
-
-The demo uses fake providers. Run `make demo-gif` to record it again. See [docs/demo](docs/demo/).
-
-## Install
-
-Release binaries are available for Linux on amd64 and arm64. Each archive has `tollgate` and the `fakeprovider` test server.
-
-1. Download and extract the archive for your CPU:
-
-   ```sh
-   VERSION=0.1.0
-   ARCH=amd64 # or arm64
-   curl -fsSLO "https://github.com/ykakade/tollgate/releases/download/v${VERSION}/tollgate_${VERSION}_linux_${ARCH}.tar.gz"
-   curl -fsSLO "https://github.com/ykakade/tollgate/releases/download/v${VERSION}/checksums.txt"
-   sha256sum --ignore-missing -c checksums.txt
-   tar -xzf "tollgate_${VERSION}_linux_${ARCH}.tar.gz" tollgate fakeprovider
-   ```
-
-2. Optional: verify the build provenance with the GitHub CLI:
-
-   ```sh
-   gh attestation verify "tollgate_${VERSION}_linux_${ARCH}.tar.gz" --repo ykakade/tollgate
-   ```
-
-3. Optional: verify the signature of the checksum file with [cosign](https://docs.sigstore.dev/cosign/system_config/installation/):
-
-   ```sh
-   curl -fsSLO "https://github.com/ykakade/tollgate/releases/download/v${VERSION}/checksums.txt.sigstore.json"
-   cosign verify-blob checksums.txt \
-     --bundle checksums.txt.sigstore.json \
-     --certificate-identity "https://github.com/ykakade/tollgate/.github/workflows/release.yml@refs/tags/v${VERSION}" \
-     --certificate-oidc-issuer https://token.actions.githubusercontent.com
-   ```
-
-4. Show the version:
-
-   ```sh
-   ./tollgate version
-   ```
-
-Result: Tollgate shows its version, its commit, and the Go version. The procedures below use `./bin/tollgate`. With a release archive, use `./tollgate` and `./fakeprovider`.
-
-On macOS or Windows, install with Go: `go install github.com/ykakade/tollgate/cmd/tollgate@latest`. You can also build from source.
-
-## Build from source
-
-Prerequisites:
-
-- Go (the version in `go.mod`)
-- GNU Make
+**Prerequisites:** Git, GNU Make, Node.js with npm, and the Go version in [`go.mod`](go.mod).
 
 1. Clone the repository:
 
@@ -104,104 +73,97 @@ Prerequisites:
    cd tollgate
    ```
 
-2. Build the binaries:
+2. Start the demo:
 
    ```sh
-   make build
+   make dashboard-demo
    ```
 
-3. Show the version:
+3. Open `http://127.0.0.1:9090`. Explore Overview, Sessions, Providers, and Keys.
 
-   ```sh
-   ./bin/tollgate version
-   ```
+**Result:** the dashboard shows spend, session budgets, cache use, fallbacks, and provider health. Stop the demo with `Ctrl-C`.
 
-Result: Tollgate shows its version, its commit, and the Go version.
+If a port is busy, stop the process that uses it. For a first API request, follow the [quick start guide](docs/quickstart.md#send-a-first-request).
 
-If the build fails, make sure that your Go version is the same as or later than the version in `go.mod`.
+### Install the gateway
 
-## Quick start with the fake provider
+Install with Go:
 
-This procedure uses the fake provider, so you need no provider key.
+```sh
+go install github.com/ykakade/tollgate/cmd/tollgate@latest
+```
 
-1. Start the fake provider:
+Or download a Linux binary for amd64 or arm64 from [Releases](https://github.com/ykakade/tollgate/releases/latest). Archives include checksums, a signature, and build provenance. The [installation guide](docs/quickstart.md#install-a-release-binary) covers verification and source builds.
 
-   ```sh
-   ./bin/fakeprovider -listen 127.0.0.1:8090
-   ```
+### Connect Claude Code
 
-2. In a different terminal, make a configuration file:
+Follow the [Claude Code example](examples/claude-code/README.md) to configure a provider and create a Tollgate key. Then point the client at the gateway:
 
-   ```sh
-   ./bin/tollgate init > tollgate.yaml
-   ```
+```sh
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+export ANTHROPIC_AUTH_TOKEN='YOUR_TOLLGATE_KEY'
+claude
+```
 
-3. In `tollgate.yaml`, set the `base_url` of the `anthropic` provider to `http://127.0.0.1:8090`.
-4. Make a key:
+The client uses a Tollgate key. The gateway reads provider credentials from the environment or a file.
 
-   ```sh
-   ./bin/tollgate keys create -id laptop
-   ```
+## Dashboard
 
-5. Add the two lines that the command shows to the `keys` list of the tenant `personal` in `tollgate.yaml`. Remove `[]` after `keys:`.
-6. Start Tollgate. The fake provider accepts any provider key:
+Inspect cost and behavior without another service. Select a tenant and time range, then open a session to see its budget and request history.
 
-   ```sh
-   ANTHROPIC_API_KEY=fake ./bin/tollgate serve -config tollgate.yaml
-   ```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/dashboard-overview-dark.png">
+  <img alt="Tollgate overview: spend, cache use, request totals, hourly charts, and route costs" src="docs/assets/dashboard-overview-light.png">
+</picture>
 
-7. In a third terminal, send a streaming request with your Tollgate key:
+<details>
+<summary><strong>Explore agent sessions and provider health</strong></summary>
 
-   ```sh
-   curl http://127.0.0.1:8080/v1/messages \
-     -H "x-api-key: <your Tollgate key>" \
-     -H "anthropic-version: 2023-06-01" \
-     -H "content-type: application/json" \
-     -d '{"model":"claude-sonnet-5-5","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"Say hello."}]}'
-   ```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/dashboard-session-dark.png">
+  <img alt="Session detail with remaining budget, spend projection, and request timeline" src="docs/assets/dashboard-session-light.png">
+</picture>
 
-Result: Tollgate sends the event stream of the fake provider, with the text `Hello from the Tollgate fake provider.` Tollgate writes a log line with the tokens of the request.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/dashboard-providers-dark.png">
+  <img alt="Provider circuit breaker states and time to first token" src="docs/assets/dashboard-providers-light.png">
+</picture>
 
-If Tollgate does not start, run `./bin/tollgate config validate -config tollgate.yaml`. It shows each error with its line number.
+</details>
 
-To use Tollgate with Claude Code and the Anthropic API, see [examples/claude-code](examples/claude-code/).
+All screenshots use synthetic demo data. Reproduce them with `make dashboard-demo`. See the [admin API and dashboard guide](docs/admin-api.md).
 
-## Demo with metrics and traces
+## Engineering
 
-If you have Docker Compose, run `make demo`. It starts Tollgate, fake providers, a load generator, Prometheus, Grafana and Jaeger.
-Then open Grafana at `http://127.0.0.1:3000`. Run `make demo-down` to stop the stack. See [the demo stack](docs/observability.md#demo-stack).
+- **Streaming correctness:** golden tests check byte-exact provider streams. Client disconnects cancel upstream work; graceful shutdown drains active streams.
+- **Shared-state checks:** cluster tests exercise limits and budget overspend with three gateway copies and real Redis.
+- **Protocol checks:** integration tests use the official Anthropic and OpenAI SDKs. Fuzz targets cover SSE, request preflight, configuration, and redaction.
+- **Documented tradeoffs:** [33 architecture decision records](docs/adr/README.md) explain the store, retries, budgets, sessions, cache, and dashboard.
+- **Build checks:** CI runs the race detector, static analysis, dependency scans, and demo-stack checks. Releases include signatures and provenance.
 
-## Commands
-
-| Command | What it does |
-| --- | --- |
-| `tollgate serve` | Starts the gateway. |
-| `tollgate init` | Shows a starter configuration file. |
-| `tollgate keys create -id <name>` | Makes a key and shows its hash for the configuration file. |
-| `tollgate config validate` | Checks the configuration file and shows all errors. |
-| `tollgate version` | Shows the version. |
+The video shows **89 µs of gateway overhead for one local demo request**. This is an example, not a workload benchmark. See [observability](docs/observability.md) to measure your deployment.
 
 ## Documentation
 
-- [Configuration](docs/configuration.md): each field of the configuration file
-- [Rate limits and budgets](docs/limits.md): limits, budgets, and their tolerances
-- [Reliability](docs/reliability.md): fallback rules, breakers, cloud targets, and M3 acceptance tests
-- [Agent features](docs/agent-features.md): sessions, sticky routing, the response cache, and redaction
-- [Admin API and dashboard](docs/admin-api.md): the endpoints of the admin port and the dashboard
-- [Operations](docs/operations.md): start, stop, health endpoints and logs
-- [Observability](docs/observability.md): metrics, traces, the admin port, the dashboard and the demo stack
-- [M1 validation](docs/m1-validation.md): acceptance checks and validation limits
-- [Decision records](docs/adr/): the design decisions and the reasons for them
-- [Glossary](docs/glossary.md): the technical words that the documents use
+Start at the [documentation home](docs/README.md), or go directly to a guide:
+
+| Guide | Covers |
+| --- | --- |
+| [Quick start](docs/quickstart.md) | Installation, a first request, Claude Code, and demo commands |
+| [Configuration](docs/configuration.md) | Providers, routes, tenants, keys, and every YAML field |
+| [Limits and budgets](docs/limits.md) | Reservations, Redis behavior, and overspend bounds |
+| [Reliability](docs/reliability.md) | Fallback rules, retries, circuit breakers, and timeouts |
+| [Agent features](docs/agent-features.md) | Sessions, sticky routing, caching, redaction, and reports |
+| [Admin API](docs/admin-api.md) | Dashboard access, endpoints, authentication, and data limits |
+| [Observability](docs/observability.md) | Prometheus, OpenTelemetry, Grafana, and the Docker demo |
+| [Operations](docs/operations.md) | Health checks, logs, shutdown, and deployment |
+
+The searchable documentation site is in `docs/`. Run `make docs-serve` to read it locally, or `make docs` to build it.
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and required checks. Report bugs and propose features in [Issues](https://github.com/ykakade/tollgate/issues).
 
-## Security
+For security issues, use [private vulnerability reporting](https://github.com/ykakade/tollgate/security/advisories/new). See [SECURITY.md](SECURITY.md).
 
-Do not report security problems in public issues. Use [private vulnerability reporting](https://github.com/ykakade/tollgate/security/advisories/new). See [SECURITY.md](SECURITY.md).
-
-## License
-
-Apache-2.0. See [LICENSE](LICENSE).
+Licensed under [Apache-2.0](LICENSE).

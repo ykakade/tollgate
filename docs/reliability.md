@@ -79,7 +79,7 @@ The SSE meter has a separate, bounded event buffer of at most 4 MiB.
 Goal: Check fallback without a live provider account.
 
 Prerequisites: The binaries from `make build`, and a configuration with two Anthropic providers on ports 8090 and 8091.
-Add both providers to one route, with the provider on port 8090 first. Use the quick-start key procedure in the [README](../README.md#quick-start-with-the-fake-provider).
+Add both providers to one route, with the provider on port 8090 first. Use the key procedure in the [quick start](quickstart.md#send-a-first-request).
 
 1. Start the first fake provider:
 

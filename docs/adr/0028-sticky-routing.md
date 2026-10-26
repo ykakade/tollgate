@@ -10,7 +10,7 @@ A return to the primary after fallback can lose a warm prompt cache on the backu
 
 ## Decision
 
-Read the sticky entry with admission and write the successful target with settlement. Scope the entry by tenant and session. Its TTL is providers.<name>.cache_ttl. Validate the stored target hash against the current route. Breakers, cooldowns and retry rules still apply. Record target switches and an upper bound for their cache loss.
+Read the sticky entry with admission and write the successful target with settlement. Scope the entry by tenant and session. Its TTL is `providers.<name>.cache_ttl`. Validate the stored target hash against the current route. Breakers, cooldowns and retry rules still apply. Record target switches and an upper bound for their cache loss.
 
 ## Alternatives
 

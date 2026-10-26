@@ -132,3 +132,11 @@ demo-gif: build ## Record docs/assets/demo.gif. Needs vhs, ffmpeg, jq, Claude Co
 .PHONY: dashboard-demo
 dashboard-demo: build ## Start the dashboard demo with synthetic usage. Stop with Ctrl-C.
 	node web/scripts/demo.mjs
+
+.PHONY: docs
+docs: ## Build the searchable documentation site.
+	cd docs && $(NPM) ci --ignore-scripts && $(NPM) run build
+
+.PHONY: docs-serve
+docs-serve: ## Start the documentation site for local use.
+	cd docs && $(NPM) ci --ignore-scripts && $(NPM) run dev

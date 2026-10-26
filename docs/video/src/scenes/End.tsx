@@ -52,7 +52,7 @@ export const End: React.FC = () => {
         <div style={{marginTop: 54, display: 'flex', flexDirection: 'column', alignItems: 'center', opacity: repo, transform: `translateY(${(1 - repo) * 20}px)`}}>
           <div style={{fontFamily: monoFont, fontSize: 40, fontWeight: 700, color: c.text}}>github.com/ykakade/tollgate</div>
           <div style={{height: 3, width: 640 * line, marginTop: 10, background: `linear-gradient(90deg, transparent, ${c.blueLight}, transparent)`}} />
-          <div style={{fontFamily: font, fontSize: 26, color: c.muted, marginTop: 18}}>Open source · Apache-2.0</div>
+          <div style={{fontFamily: font, fontSize: 30, color: c.muted, marginTop: 18}}>Open source · Apache-2.0</div>
         </div>
       </AbsoluteFill>
     </AbsoluteFill>
