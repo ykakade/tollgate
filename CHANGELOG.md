@@ -10,10 +10,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - A searchable VitePress documentation site, a quick start guide, and documentation build and deployment commands.
 - A launch video at the top of the README, made with Remotion from real Tollgate output and dashboard screenshots. The source is in `docs/video`.
+- A README banner, a light and dark "How it works" diagram, and a GitHub social preview image. `npm run readme` in `docs/video` renders them from Remotion stills.
 
 ### Changed
 
 - A shorter README with feature comparisons, a first demo, and direct links to the guides.
+- A new README that starts with the problem that Tollgate solves, with a quick start for Claude Code, real failover and budget output, and a FAQ. The feature tour moved to the "See it work" section.
 - An 81-second feature tour, sharp 1080p exports, and light and dark dashboard screenshots with the current logo.
 - A simplified T mark shared by the dashboard, favicon, documentation, and feature video.
 

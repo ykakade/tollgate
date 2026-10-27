@@ -8,6 +8,7 @@
     "studio": "remotion studio",
     "render": "npm run render:frames && npm run encode:mp4 && npm run encode:webp",
     "still": "remotion still Launch out/still.png",
+    "readme": "remotion still Banner out/readme/banner.png --scale=1.5 && remotion still Social out/readme/social.png && remotion still FlowLight out/readme/flow-light.png --scale=2 && remotion still FlowDark out/readme/flow-dark.png --scale=2 && node scripts/readme.mjs",
     "typecheck": "tsc --noEmit",
     "render:frames": "remotion render Launch out/launch-frames --sequence --image-format=png --props='{\"still\":true}'",
     "encode:mp4": "remotion ffmpeg -framerate 60 -i out/launch-frames/element-%04d.png -c:v libx264 -crf 16 -preset slow -pix_fmt yuv420p -movflags +faststart -y out/tollgate.mp4",

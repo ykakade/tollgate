@@ -1,5 +1,5 @@
 import React from 'react';
-import {AbsoluteFill, Composition, interpolate, useCurrentFrame} from 'remotion';
+import {AbsoluteFill, Composition, interpolate, Still, useCurrentFrame} from 'remotion';
 import {linearTiming, TransitionSeries} from '@remotion/transitions';
 import type {TransitionPresentation, TransitionPresentationComponentProps} from '@remotion/transitions';
 import {clamp, easeInOut, Logo} from './components/ui';
@@ -15,6 +15,8 @@ import {Observability} from './scenes/Observability';
 import {Dashboard} from './scenes/Dashboard';
 import {Quality} from './scenes/Quality';
 import {End} from './scenes/End';
+import {Banner, BANNER_H, BANNER_W, Social, SOCIAL_H, SOCIAL_W} from './stills/Banner';
+import {Flow, FLOW_H, FLOW_W} from './stills/Flow';
 
 // Rise transition: the old scene moves up and fades, the new one rises in.
 // It has no blur, so that text stays sharp in the README WebP.
@@ -83,5 +85,10 @@ export const Root: React.FC = () => (
     {scenes.map(([Scene, d], i) => (
       <Composition key={i} id={`Scene${i + 1}`} component={Scene} durationInFrames={d} fps={FPS} width={1920} height={1080} />
     ))}
+    {/* README images. See README.md in this directory. */}
+    <Still id="Banner" component={Banner} width={BANNER_W} height={BANNER_H} />
+    <Still id="Social" component={Social} width={SOCIAL_W} height={SOCIAL_H} />
+    <Still id="FlowLight" component={Flow} defaultProps={{theme: 'light' as const}} width={FLOW_W} height={FLOW_H} />
+    <Still id="FlowDark" component={Flow} defaultProps={{theme: 'dark' as const}} width={FLOW_W} height={FLOW_H} />
   </>
 );

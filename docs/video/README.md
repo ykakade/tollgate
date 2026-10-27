@@ -86,6 +86,32 @@ The WebP encoder reads PNGs directly. An intermediate H.264 video would reduce c
 
 The `still` input prop fixes the background and removes grain. It does not stop scene animations. The output directories are ignored by Git.
 
+## README images
+
+The README banner, the "How it works" diagram, and the GitHub social preview are Remotion stills in `src/stills/`. The banner artwork in `public/readme/banner-art.jpg` was made with an image model and has no text. The stills add the logo and all words, so that text stays sharp and matches the brand.
+
+| Composition | Output | Use |
+| --- | --- | --- |
+| `Banner` | `docs/assets/readme-banner.webp` | Top of the README |
+| `FlowLight`, `FlowDark` | `docs/assets/readme-flow-{light,dark}.webp` | "How it works" in the README, for each GitHub theme |
+| `Social` | `docs/assets/social-preview.jpg` | Repository Settings → Social preview |
+
+Goal: render and encode the README images again after a change.
+
+Prerequisites: the dependencies from [Edit](#edit).
+
+1. Run:
+
+   ```sh
+   npm run readme
+   ```
+
+2. Inspect the images at the width that GitHub shows them, about 900 CSS pixels, in both themes.
+
+Result: `scripts/readme.mjs` writes the four files in `docs/assets/`. If text is too small in the diagram, keep its smallest text at 20 px or more.
+
+The diagram has a transparent background, so its cards sit on the GitHub page. Lossless WebP keeps its edges sharp and is smaller than lossy WebP for flat colors. GitHub accepts only PNG, JPEG, or GIF for the social preview.
+
 ## Refresh screenshots
 
 Goal: capture current dashboard screens with the current logo.
