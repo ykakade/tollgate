@@ -8,7 +8,7 @@ replace github.com/ykakade/tollgate => ../..
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.84.0
-	github.com/openai/openai-go/v3 v3.86.0
+	github.com/openai/openai-go/v3 v3.89.0
 	github.com/ykakade/tollgate v0.0.0
 )
 
