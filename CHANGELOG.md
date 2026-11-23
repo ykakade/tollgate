@@ -8,9 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- The `tollgate demo` command. It starts fake providers in the same process, 7 days of synthetic usage, live agent-like sessions, and the dashboard. It needs no API key, no clone, no Node.js, and no Docker. `make dashboard-demo` now runs it.
 - A searchable VitePress documentation site, a quick start guide, and documentation build and deployment commands.
 - A launch video at the top of the README, made with Remotion from real Tollgate output and dashboard screenshots. The source is in `docs/video`.
 - A README banner, a light and dark "How it works" diagram, and a GitHub social preview image. `npm run readme` in `docs/video` renders them from Remotion stills.
+
+### Fixed
+
+- The vulnerability scan in CI failed on Go 1.27.3 because of GO-2026-6859 in `net/http`. Tollgate now builds with Go 1.27.4.
+- `make fuzz` now runs `FuzzMask` in `internal/redact`, so CI runs all 4 fuzz targets.
+- The synthetic demo history used `claude-haiku-5-5` prices 10 times higher than `pricing.yaml`, and had events after the start time of the demo. The history now uses the price table in the binary and stops at the start time.
 
 ### Changed
 

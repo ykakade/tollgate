@@ -43,6 +43,7 @@ Usage:
 
 Commands:
   serve             Start the gateway.
+  demo              Start a demo with fake providers and the dashboard. No API key needed.
   init              Show a starter configuration file.
   keys create       Make a virtual key for a client.
   config validate   Check a configuration file.
@@ -77,6 +78,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch cmd {
 	case "serve":
 		return runServe(ctx, rest, stderr)
+	case "demo":
+		return runDemo(ctx, rest, stdout, stderr)
 	case "init":
 		return runInit(rest, stdout, stderr)
 	case "keys":

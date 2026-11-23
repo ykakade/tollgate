@@ -56,13 +56,14 @@ The 81-second tour explains request controls, failover, circuit breakers, budget
 
 ## Start in one command
 
-For a local dashboard with synthetic traffic and no API key, clone the repository and run:
+For a local dashboard with synthetic traffic and no API key, run:
 
 ```sh
-make dashboard-demo
+go install github.com/ykakade/tollgate/cmd/tollgate@latest
+tollgate demo
 ```
 
-Open `http://127.0.0.1:9090`. You need Go, GNU Make, and Node.js. See the [quick start](quickstart.md) for a first API request.
+Open `http://127.0.0.1:9090`. You need only Go. See the [quick start](quickstart.md) for a first API request.
 
 ## Install
 

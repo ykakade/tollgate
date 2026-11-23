@@ -106,7 +106,7 @@ The repository commits `web/dist`, so ordinary Go builds need no Node installati
 
 Result: the demo starts fake providers and Tollgate, seeds seven days of synthetic history, and sends live synthetic requests.
 Open `http://127.0.0.1:9090/`. Stop the demo with Ctrl-C.
-If a port is occupied, stop the existing service before the demo. Demo files stay in a temporary directory.
+If a port is occupied, run `bin/tollgate demo -listen 127.0.0.1:18080 -admin-listen 127.0.0.1:19090` instead. The demo removes its temporary directory at exit. To keep the files, add `-dir <path>`.
 Never use the demo key outside the demo.
 
 CI runs `make web-check` to detect stale committed assets. Commit the source and `web/dist` together.

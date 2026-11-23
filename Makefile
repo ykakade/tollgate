@@ -131,7 +131,7 @@ demo-gif: build ## Record docs/assets/demo.gif. Needs vhs, ffmpeg, jq, Claude Co
 
 .PHONY: dashboard-demo
 dashboard-demo: build ## Start the dashboard demo with synthetic usage. Stop with Ctrl-C.
-	node web/scripts/demo.mjs
+	$(BIN)/tollgate demo
 
 .PHONY: docs
 docs: ## Build the searchable documentation site.

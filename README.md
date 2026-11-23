@@ -42,14 +42,14 @@ Coding agents do not spend money like chat apps. One task can send hundreds of l
 
 ### Try it with no API key
 
-Prerequisites: Git, GNU Make, Node.js, and the Go version in [`go.mod`](go.mod).
+Prerequisites: the Go version in [`go.mod`](go.mod). No API key, Node.js, or Docker.
 
 ```sh
-git clone https://github.com/ykakade/tollgate.git && cd tollgate
-make dashboard-demo
+go install github.com/ykakade/tollgate/cmd/tollgate@latest
+tollgate demo
 ```
 
-Open `http://127.0.0.1:9090`. Tollgate runs with fake providers, 7 days of synthetic history, and live agent-like sessions. One fake provider always fails, so you can watch failover and circuit breakers at work. Stop the demo with `Ctrl-C`.
+Open `http://127.0.0.1:9090`. Tollgate runs with in-process fake providers, 7 days of synthetic history, and live agent-like sessions. One fake provider always fails, so you can watch failover and circuit breakers at work. The demo prints a `curl` command with a demo key, so you can send your own request. Stop the demo with `Ctrl-C`.
 
 ### Put Claude Code behind Tollgate
 
@@ -201,7 +201,7 @@ The [agent features](docs/agent-features.md) and [reliability](docs/reliability.
 
 ## Built like infrastructure
 
-**250 tests** · **90.8% statement coverage** · **4 fuzz targets** · **33 architecture decision records** · **signed releases**
+**255 tests** · **90.5% statement coverage** · **4 fuzz targets** · **33 architecture decision records** · **signed releases**
 
 - **Byte-exact streams.** Golden tests compare recorded provider streams byte for byte. A client disconnect cancels the upstream request, and a graceful shutdown drains open streams.
 - **Real clients.** Integration tests run the official Anthropic and OpenAI SDKs against the gateway.

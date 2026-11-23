@@ -170,13 +170,14 @@ If Claude Code shows `The API key is not valid`, make sure that `ANTHROPIC_AUTH_
 If you have Docker Compose, run `make demo`. It starts Tollgate, fake providers, a load generator, Prometheus, Grafana and Jaeger.
 Open Grafana at `http://127.0.0.1:3000`. Run `make demo-down` to stop the stack. See [the demo stack](observability.md#demo-stack).
 
-To see the dashboard with synthetic data and no Docker, run `make dashboard-demo`.
+To see the dashboard with synthetic data and no Docker, run `tollgate demo`. It starts fake providers in the same process, writes 7 days of synthetic usage, and sends live requests. Use `-listen` and `-admin-listen` to change the ports, and `-dir` to keep the demo files after the demo stops.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `tollgate serve` | Starts the gateway. |
+| `tollgate demo` | Starts a demo with fake providers, synthetic usage, and the dashboard. Needs no API key. |
 | `tollgate init` | Shows a starter configuration file. |
 | `tollgate keys create -id <name>` | Makes a key and shows its hash for the configuration file. |
 | `tollgate config validate` | Checks the configuration file and shows all errors. |
