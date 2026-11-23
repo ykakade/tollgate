@@ -96,7 +96,7 @@ Open `http://127.0.0.1:9090`. Tollgate runs with in-process fake providers, 7 da
 </details>
 
 > [!NOTE]
-> Tollgate is alpha software (v0.1.0). The configuration format can change before v1.0. Read the [budget tolerances](docs/limits.md#worst-case-overspend) before you depend on a budget.
+> Tollgate is alpha software (v0.1.1). The configuration format can change before v1.0. Read the [budget tolerances](docs/limits.md#worst-case-overspend) before you depend on a budget.
 
 ## How it works
 

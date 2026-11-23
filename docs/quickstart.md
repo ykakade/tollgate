@@ -11,7 +11,7 @@ Prerequisites: `curl`, `sha256sum` and `tar`.
 1. Download and extract the archive for your CPU:
 
    ```sh
-   VERSION=0.1.0
+   VERSION=0.1.1
    ARCH=amd64 # or arm64
    curl -fsSLO "https://github.com/ykakade/tollgate/releases/download/v${VERSION}/tollgate_${VERSION}_linux_${ARCH}.tar.gz"
    curl -fsSLO "https://github.com/ykakade/tollgate/releases/download/v${VERSION}/checksums.txt"

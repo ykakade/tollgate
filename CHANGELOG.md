@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-23
+
 ### Added
 
 - The `tollgate demo` command. It starts fake providers in the same process, 7 days of synthetic usage, live agent-like sessions, and the dashboard. It needs no API key, no clone, no Node.js, and no Docker. `make dashboard-demo` now runs it.
@@ -81,5 +83,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - The build, test, and lint targets in the `Makefile`, and the CI workflow.
 - The contribution guide, the security policy, the code of conduct, and the issue and pull request templates.
 
-[Unreleased]: https://github.com/ykakade/tollgate/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ykakade/tollgate/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/ykakade/tollgate/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ykakade/tollgate/releases/tag/v0.1.0
