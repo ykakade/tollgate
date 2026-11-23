@@ -9,7 +9,7 @@ GOVULNCHECK_VERSION ?= v1.9.0
 
 # FUZZTIME is the run time of each fuzz target in "make fuzz".
 FUZZTIME ?= 30s
-FUZZ_TARGETS := internal/sse:FuzzSSEParser internal/preflight:FuzzPreflightDecode internal/config:FuzzConfigLoad
+FUZZ_TARGETS := internal/sse:FuzzSSEParser internal/preflight:FuzzPreflightDecode internal/config:FuzzConfigLoad internal/redact:FuzzMask
 
 # The race detector needs cgo and a C compiler. If the system has no C
 # compiler, the tests run without the race detector and make shows a warning.

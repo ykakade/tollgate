@@ -2,7 +2,7 @@ module github.com/ykakade/tollgate
 
 go 1.27.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/google/go-cmp v0.7.0
